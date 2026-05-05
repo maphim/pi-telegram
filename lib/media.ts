@@ -6,6 +6,7 @@
 import { basename, dirname } from "node:path";
 
 const TELEGRAM_MEDIA_GROUP_DEBOUNCE_MS = 1200;
+const TELEGRAM_REPLY_CONTEXT_MAX_LENGTH = 1000;
 
 export interface TelegramPhotoSize {
   file_id: string;
@@ -170,23 +171,62 @@ function isImageMimeType(mimeType: string | undefined): boolean {
   return mimeType?.toLowerCase().startsWith("image/") ?? false;
 }
 
+function truncateTelegramReplyContextText(text: string): string {
+  if (text.length <= TELEGRAM_REPLY_CONTEXT_MAX_LENGTH) return text;
+  return `${text.slice(0, TELEGRAM_REPLY_CONTEXT_MAX_LENGTH).trimEnd()}…`;
+}
+
+export function extractTelegramReplyContextText(
+  message: TelegramMediaMessage,
+): string {
+  const quoted = (
+    message.reply_to_message?.text ||
+    message.reply_to_message?.caption ||
+    ""
+  ).trim();
+  return quoted ? truncateTelegramReplyContextText(quoted) : "";
+}
+
+export function appendTelegramReplyContext(
+  text: string,
+  replyContext: string,
+): string {
+  if (!replyContext) return text;
+  const replyBlock = `[reply] ${replyContext}`;
+  return text ? `${text}\n\n${replyBlock}` : `_\n\n${replyBlock}`;
+}
+
+export function extractTelegramMessagePromptText(
+  message: TelegramMediaMessage,
+): string {
+  return appendTelegramReplyContext(
+    extractTelegramMessageText(message),
+    extractTelegramReplyContextText(message),
+  );
+}
+
 export function extractTelegramMessageText(
   message: TelegramMediaMessage,
 ): string {
-  let text = (message.text || message.caption || "").trim();
-  if (message.reply_to_message) {
-    const quoted = (message.reply_to_message.text || message.reply_to_message.caption || "").trim();
-    if (quoted) {
-      text = text ? `[reply] "${quoted}"\n\n${text}` : `[reply] "${quoted}"`;
-    }
-  }
-  return text;
+  return (message.text || message.caption || "").trim();
 }
 
 export function extractTelegramMessagesText(
   messages: TelegramMediaMessage[],
 ): string {
   return messages.map(extractTelegramMessageText).filter(Boolean).join("\n\n");
+}
+
+export function extractTelegramMessagesPromptText(
+  messages: TelegramMediaMessage[],
+): string {
+  const text = extractTelegramMessagesText(messages);
+  const firstMessage = messages[0];
+  if (!firstMessage) return text;
+  return appendTelegramReplyContext(
+    text,
+    extractTelegramReplyContextText(firstMessage),
+  );
 }
 
 export function extractFirstTelegramMessageText(
