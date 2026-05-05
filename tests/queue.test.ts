@@ -15,6 +15,7 @@ import {
   buildTelegramSessionShutdownState,
   buildTelegramSessionStartState,
   canDispatchTelegramTurnState,
+  clearTelegramQueueItemsRuntime,
   clearTelegramQueuePromptPriority,
   clearTelegramQueuePromptPriorityRuntime,
   compareTelegramQueueItems,
@@ -24,6 +25,7 @@ import {
   createTelegramAgentStartHook,
   createTelegramControlItemBuilder,
   createTelegramControlQueueController,
+  createTelegramDeferredQueueDispatchRuntime,
   createTelegramDispatchReadinessChecker,
   createTelegramPromptEnqueueController,
   createTelegramQueueDispatchController,
@@ -382,7 +384,9 @@ test("Queue mutation controller binds queue accessors to runtime mutations", () 
   assert.equal(nextPriorityOrder, 8);
   assert.equal(controller.clearPriorityByMessageId(11, "c"), true);
   assert.equal(controller.removeByMessageIds([11], "d"), 1);
-  assert.deepEqual(events, ["a", "append", "b", "c", "d"]);
+  assert.equal(controller.clear("e"), 2);
+  assert.deepEqual(queuedItems, []);
+  assert.deepEqual(events, ["a", "append", "b", "c", "d", "e"]);
 });
 
 test("Queue mutation runtime removes, sorts, and reprioritizes prompts", () => {
@@ -450,6 +454,9 @@ test("Queue mutation runtime removes, sorts, and reprioritizes prompts", () => {
     queuedItems.map((item) => item.statusSummary),
     ["control", "priority"],
   );
+  assert.equal(clearTelegramQueueItemsRuntime<string>(deps), 2);
+  assert.deepEqual(queuedItems, []);
+  assert.equal(clearTelegramQueueItemsRuntime<string>(deps), 0);
   assert.deepEqual(events, [
     "items:prompt,control,priority",
     "items:control,prompt,priority",
@@ -459,6 +466,8 @@ test("Queue mutation runtime removes, sorts, and reprioritizes prompts", () => {
     "items:control,prompt,priority",
     "status:ctx",
     "items:control,priority",
+    "status:ctx",
+    "items:",
     "status:ctx",
   ]);
 });
@@ -495,11 +504,7 @@ test("Queue priority reactions apply to attachment-only prompt turns", () => {
     historyText: "voice transcript",
     statusSummary: "📎 voice.ogg",
   });
-  const prioritized = prioritizeTelegramQueuePrompt(
-    [attachmentPrompt],
-    21,
-    0,
-  );
+  const prioritized = prioritizeTelegramQueuePrompt([attachmentPrompt], 21, 0);
   assert.equal(prioritized.changed, true);
   assert.equal(prioritized.items[0]?.queueLane, "priority");
   assert.equal(prioritized.items[0]?.statusSummary, "📎 voice.ogg");
@@ -788,6 +793,126 @@ test("Agent end runtime resets state, finalizes replies, sends attachments, and 
   ]);
 });
 
+test("Agent end runtime passes assistant button markup to final text delivery", async () => {
+  const events: unknown[] = [];
+  const replyMarkup = {
+    inline_keyboard: [[{ text: "Continue", callback_data: "btn:1" }]],
+  };
+  const turn: PendingTelegramTurn = createQueueTestPromptTurn();
+  await handleTelegramAgentEndRuntime({
+    turn,
+    assistant: {
+      text: 'Answer\n\n<!-- telegram_button label="Continue"\nContinue\n-->',
+    },
+    preserveQueuedTurnsAsHistory: false,
+    resetRuntimeState: () => {
+      events.push("reset");
+    },
+    updateStatus: () => {
+      events.push("status");
+    },
+    dispatchNextQueuedTelegramTurn: () => {
+      events.push("dispatch");
+    },
+    clearPreview: async (chatId) => {
+      events.push(`clear:${chatId}`);
+    },
+    setPreviewPendingText: (text) => {
+      events.push(`preview:${text}`);
+    },
+    finalizeMarkdownPreview: async (_chatId, markdown, _replyTo, options) => {
+      events.push({ finalize: markdown, replyMarkup: options?.replyMarkup });
+      return true;
+    },
+    sendMarkdownReply: async () => {
+      events.push("unexpected:markdown");
+    },
+    sendTextReply: async () => {
+      events.push("unexpected:text");
+    },
+    sendQueuedAttachments: async () => {
+      events.push("attachments");
+    },
+    planOutboundReply: () => ({ markdown: "Answer", replyMarkup }),
+  });
+  assert.deepEqual(events, [
+    "reset",
+    "status",
+    "preview:Answer",
+    { finalize: "Answer", replyMarkup },
+    "attachments",
+    "dispatch",
+  ]);
+});
+
+test("Agent end runtime splits assistant voice markup into text and voice delivery", async () => {
+  const events: string[] = [];
+  const turn: PendingTelegramTurn = createQueueTestPromptTurn();
+  await handleTelegramAgentEndRuntime({
+    turn,
+    assistant: {
+      text: [
+        "Full technical text.",
+        "",
+        "<!-- telegram_voice lang=ru rate=+20%",
+        "Short voice summary.",
+        "-->",
+      ].join("\n"),
+    },
+    preserveQueuedTurnsAsHistory: false,
+    resetRuntimeState: () => {
+      events.push("reset");
+    },
+    updateStatus: () => {
+      events.push("status");
+    },
+    dispatchNextQueuedTelegramTurn: () => {
+      events.push("dispatch");
+    },
+    clearPreview: async (chatId) => {
+      events.push(`clear:${chatId}`);
+    },
+    setPreviewPendingText: (text) => {
+      events.push(`preview:${text}`);
+    },
+    finalizeMarkdownPreview: async (_chatId, markdown) => {
+      events.push(`finalize:${markdown}`);
+      return true;
+    },
+    sendMarkdownReply: async () => {
+      events.push("unexpected:markdown");
+    },
+    sendTextReply: async () => {
+      events.push("unexpected:text");
+    },
+    sendQueuedAttachments: async () => {
+      events.push("attachments");
+    },
+    planOutboundReply: (markdown) => ({
+      markdown: "Full technical text.",
+      voiceText: markdown.includes("telegram_voice")
+        ? "Short voice summary."
+        : undefined,
+      lang: "ru",
+      rate: "+20%",
+    }),
+    sendOutboundReplyArtifacts: async (_turn, plan, options) => {
+      events.push(
+        `voice:${plan.voiceText}:${plan.lang}:${plan.rate}:${options?.replyToPrompt}`,
+      );
+    },
+  });
+  assert.deepEqual(events, [
+    "reset",
+    "status",
+    "preview:Full technical text.",
+    "finalize:Full technical text.",
+    "voice:Short voice summary.:ru:+20%:false",
+    "attachments",
+    "dispatch",
+  ]);
+});
+
 test("Agent end hook binds assistant extraction and runtime ports", async () => {
   const events: string[] = [];
   const turn: PendingTelegramTurn = createQueueTestPromptTurn();
@@ -810,6 +935,9 @@ test("Agent end hook binds assistant extraction and runtime ports", async () => 
     },
     dispatchNextQueuedTelegramTurn: (ctx) => {
       events.push(`dispatch:${ctx.id}`);
+    },
+    requestDeferredDispatchNextQueuedTelegramTurn: (dispatch) => {
+      setTimeout(() => dispatch({ id: "ctx" }), 0);
     },
     clearPreview: async (chatId) => {
       events.push(`clear:${chatId}`);
@@ -1062,6 +1190,9 @@ test("Agent lifecycle hooks bind start, end, and tool lifecycle ports", async ()
     },
     dispatchNextQueuedTelegramTurn: (ctx) => {
       events.push(`dispatch:${ctx}`);
+    },
+    requestDeferredDispatchNextQueuedTelegramTurn: (dispatch) => {
+      setTimeout(() => dispatch("ctx"), 0);
     },
     clearPreview: async () => {
       events.push("preview:clear");
@@ -1430,6 +1561,9 @@ test("Session state applier syncs start and shutdown state through live stores",
 test("Session runtime helper runs shutdown side effects in order", async () => {
   const events: string[] = [];
   await shutdownTelegramSessionRuntime<string>({
+    unbindDeferredDispatchContext: () => {
+      events.push("unbind");
+    },
     applyState: (state) => {
       events.push(`state:${state.queuedTelegramItems.length}`);
     },
@@ -1454,6 +1588,7 @@ test("Session runtime helper runs shutdown side effects in order", async () => {
     },
   });
   assert.deepEqual(events, [
+    "unbind",
     "state:0",
     "media",
     "menus",
@@ -1664,6 +1799,65 @@ test("Control runtime reports failures before settling", async () => {
     "Telegram control action failed: boom",
     "settled",
   ]);
+});
+
+test("Deferred queue dispatch uses only the bound session context", () => {
+  const events: string[] = [];
+  const callbacks: Array<() => void> = [];
+  const clearedTimers: number[] = [];
+  const runtime = createTelegramDeferredQueueDispatchRuntime<{ id: string }>({
+    setTimer: (callback) => {
+      callbacks.push(callback);
+      return callbacks.length as unknown as ReturnType<typeof setTimeout>;
+    },
+    clearTimer: (timer) => {
+      clearedTimers.push(timer as unknown as number);
+    },
+  });
+  runtime.request((ctx) => {
+    events.push(`dispatch:${ctx.id}`);
+  });
+  assert.equal(callbacks.length, 0);
+  runtime.bind({ id: "old" });
+  runtime.request((ctx) => {
+    events.push(`dispatch:${ctx.id}`);
+  });
+  runtime.unbind();
+  callbacks[0]?.();
+  runtime.bind({ id: "new" });
+  runtime.request((ctx) => {
+    events.push(`dispatch:${ctx.id}`);
+  });
+  callbacks[1]?.();
+  assert.deepEqual(clearedTimers, [1]);
+  assert.deepEqual(events, ["dispatch:new"]);
+});
+
+test("Dispatch controller skips inactive stale contexts before readiness checks", () => {
+  const events: string[] = [];
+  const controller = createTelegramQueueDispatchController<string>({
+    getQueuedItems: () => {
+      events.push("unexpected:items");
+      return [];
+    },
+    setQueuedItems: () => {
+      events.push("unexpected:set");
+    },
+    canDispatch: () => {
+      events.push("unexpected:can-dispatch");
+      return true;
+    },
+    hasDispatchContext: () => false,
+    updateStatus: () => {
+      events.push("unexpected:status");
+    },
+    sendTextReply: async () => undefined,
+    onPromptDispatchStart: () => {},
+    sendUserMessage: () => {},
+    onPromptDispatchFailure: () => {},
+  });
+  controller.dispatchNext("stale");
+  assert.deepEqual(events, []);
 });
 
 test("Dispatch runtime idles on none and executes control items directly", () => {
@@ -2001,12 +2195,16 @@ test("Session runtime helper runs start side effects in order", async () => {
   const events: string[] = [];
   const currentModel = createQueueTestModel();
   await startTelegramSessionRuntime({
+    ctx: "ctx",
     currentModel,
     loadConfig: async () => {
       events.push("load");
     },
     applyState: (state) => {
       events.push(`state:${state.currentTelegramModel?.id}`);
+    },
+    bindDeferredDispatchContext: (ctx) => {
+      events.push(`bind:${ctx}`);
     },
     prepareTempDir: async () => {
       events.push("temp");
@@ -2015,7 +2213,7 @@ test("Session runtime helper runs start side effects in order", async () => {
       events.push("status");
     },
   });
-  assert.deepEqual(events, ["load", "state:gpt-5", "temp", "status"]);
+  assert.deepEqual(events, ["load", "state:gpt-5", "temp", "bind:ctx", "status"]);
 });
 
 test("Session runtime helper clears shutdown state", () => {
@@ -2057,11 +2255,17 @@ test("Session lifecycle runtime binds state applier into lifecycle hooks", async
     syncFlags: () => {
       events.push("flags");
     },
+    bindDeferredDispatchContext: (ctx) => {
+      events.push(`bind:${ctx}`);
+    },
     prepareTempDir: async () => {
       events.push("temp");
     },
     updateStatus: (ctx) => {
       events.push(`status:${ctx}`);
+    },
+    unbindDeferredDispatchContext: () => {
+      events.push("unbind");
     },
     clearPendingMediaGroups: () => {
       events.push("media:clear");
@@ -2092,7 +2296,9 @@ test("Session lifecycle runtime binds state applier into lifecycle hooks", async
     "counters",
     "flags",
     "temp",
+    "bind:ctx",
     "status:ctx",
+    "unbind",
     "queued:0",
     "counters",
     "flags",
@@ -2120,6 +2326,9 @@ test("Session lifecycle hooks bind start and shutdown runtime ports", async () =
     applySessionStartState: (state) => {
       events.push(`start:${state.currentTelegramModel?.id}`);
     },
+    bindDeferredDispatchContext: (ctx) => {
+      events.push(`bind:${ctx.model?.id ?? "none"}`);
+    },
     prepareTempDir: async () => {
       events.push("temp");
     },
@@ -2128,6 +2337,9 @@ test("Session lifecycle hooks bind start and shutdown runtime ports", async () =
     },
     applySessionShutdownState: (state) => {
       events.push(`shutdown:${state.queuedTelegramItems.length}`);
+    },
+    unbindDeferredDispatchContext: () => {
+      events.push("unbind");
     },
     clearPendingMediaGroups: () => {
       events.push("media");
@@ -2155,7 +2367,9 @@ test("Session lifecycle hooks bind start and shutdown runtime ports", async () =
     "load",
     "start:gpt-5",
     "temp",
+    "bind:gpt-5",
     "status:gpt-5",
+    "unbind",
     "shutdown:0",
     "media",
     "menu",

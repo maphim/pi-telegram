@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.6.3: Outbound Action Syntax & Prompt Guidance
+
+- `[Outbound Buttons]` `telegram_button: Label` now creates a label-only button whose callback prompt equals the label. Impact: button shorthand now matches the `telegram_voice: Text` inline style and leaves one canonical label-only syntax.
+- `[Outbound Actions]` `telegram_voice text="..."` and `telegram_button label=... prompt="..."` now provide explicit one-line action forms. Impact: agents can keep short voice and button actions on one line without relying on body blocks.
+- `[Outbound Parsing]` Hidden action bodies now stay attached to their action heads within the parser recovery window. Impact: hidden prompt and TTS bodies stay out of Telegram-visible messages.
+- `[Prompt Guidance]` Telegram prompt injection is now organized by inbound context, visible output, and native outbound actions, with explicit one-line vs body `telegram_button` syntax. Impact: agents get the same operational rules with less duplicated guidance and more consistent action markup.
+- `[Architecture]` Entrypoint wiring now names inbound routing, queue session lifecycle, agent lifecycle hooks, outbound reply collaborators, and repeated pi context ports before registration. Impact: `index.ts` remains the composition root while the final hook/polling registration blocks are easier to scan.
+- `[Config]` Missing `telegram.json` is now handled with an explicit existence check before reading. Impact: first-run config loading keeps the empty-config fallback without using read failures as control flow.
+
+## 0.6.2: Reload-Stale Queue Dispatch Hotfix
+
+- `[Queue Dispatch]` Deferred post-agent-end queue dispatch is now session-bound and canceled on session shutdown. Impact: `/reload` and session replacement can no longer leave old queue timers calling stale `ExtensionContext` methods such as `ctx.isIdle()`.
+- `[Typing Safety]` Typing-loop transport failures now go only to runtime diagnostics instead of updating status through an interval-captured context. Impact: typing errors remain visible in diagnostics without retaining live `ExtensionContext` in timer error paths.
+- `[Lock Watcher Safety]` Ownership-loss watchers now retain only the snapshotted lock identity and stop polling without a captured live context. Impact: singleton takeover cleanup no longer needs stale-prone status refreshes from watcher callbacks.
+- `[Media Group Safety]` Media-group debounce timers now flush through controller state instead of closure-capturing the inbound context. Impact: album coalescing keeps the same behavior while reducing stale-context retention in timer callbacks.
+
+## 0.6.1: Outbound Action & Command Timeout Hardening
+
+- `[Command Template Runtime]` Timed-out command templates now escalate from `SIGTERM` to `SIGKILL` when the child process does not exit. Impact: attachment and outbound-handler pipelines no longer hang forever on commands that ignore graceful termination.
+- `[Outbound Buttons]` `telegram_button` blocks may now omit the body when the callback prompt should equal the label. Impact: concise buttons such as `<!-- telegram_button label="OK" -->` work without duplicating the prompt text.
+- `[Outbound Comment Parsing]` Top-level outbound comments are now recognized again after fenced code blocks closed by Markdown-valid indented or longer fences. Impact: code examples stay literal while later `telegram_voice` and `telegram_button` blocks still execute correctly.
+- `[Command Template Docs]` The command-template contract now explicitly documents the strict 0.6.x shape: use `timeout`, and keep `args` as a string array of placeholder declarations. Impact: legacy `timeoutMs` and string-form `args` are not presented as supported compatibility paths.
+
+## 0.6.0: Command Templates & Assistant-Authored Outbound Actions
+
+- `[Outbound Actions]` Assistant replies now use hidden `telegram_voice` and `telegram_button` blocks as Telegram-native action markup. Impact: text stays in the normal Markdown answer, voice block bodies become native OGG/Opus `sendVoice` messages, and button bodies become normal queued Telegram prompt turns without agent-side transport tool calls.
+- `[Outbound Semantics]` Outbound behavior is now owned by the unified `outbound-handlers` domain. Impact: voice artifacts, per-block language/rate attributes, independent multi-voice delivery, singular one-block-one-button callbacks, top-level-only comment stripping, artifact upload, and prompt reply metadata are planned and delivered as one post-`agent_end` response surface while code examples stay literal.
+- `[Command Template Standard]` Command-backed handlers now share a compact shell-free template contract: no `command` field, `template` as string or `template: [...]`, `args` as declarations only, defaults via `defaults` or `{name=default}`, top-level `timeout` wrapping composed sequences, stdout-to-stdin composition piping, and `output` defaulting to `"stdout"` while allowing artifact selectors such as `"ogg"`. Impact: inbound attachment preprocessing and outbound artifact generation use the same portable automation model without provider-specific fields or shell evaluation.
+- `[Handler Boundaries]` Inbound preprocessing now lives in `attachment-handlers`, outbound generated actions live in `outbound-handlers`, and reusable template mechanics live in `command-templates`. Impact: file names, mirrored tests, and docs match the actual domains instead of broad `handlers`, standalone voice, or grouped button mini-DSL boundaries.
+- `[Docs]` Handler examples now use portable `/path/to/stt`, `/path/to/tts`, and `/path/to/tool` placeholders and dense command-template documentation. Impact: release docs describe what operators configure without leaking host-local skill paths or repeating the same template rules across documents.
+
+## 0.5.2: Telegram Reply Context
+
+- `[Telegram Replies]` Normal Telegram prompts now include quoted Telegram `reply_to_message` text/caption as a bounded `[reply]` context block. Impact: replying to an earlier Telegram message gives the agent the quoted context instead of only the new message text. Inspired by external PR #4 from @maphim.
+- `[Command Safety]` Slash-command parsing still uses only the new message text/caption, and reply context is injected only while building or editing queued prompt turns. Impact: replying with `/status`, `/model`, `/stop`, and other commands still executes the command instead of becoming a normal prompt.
+- `[Docs & Tests]` Updated README, architecture/context notes, package metadata, and media/turn regressions for reply-context forwarding, truncation, queued edits, and command-safe raw text extraction. Impact: the feature is documented and covered without weakening the existing queue/command split.
+
+## 0.5.1: Stop Queue Reset Hotfix
+
+- `[Queue Safety]` Telegram `/stop` now clears all waiting Telegram queue items, resets pending model-switch/abort-history preservation state, and then aborts the active run when possible. Impact: queued priority/default/control turns can no longer leave the bridge stopped after an abort; the next Telegram message starts from a clean queue like a fresh TUI prompt.
+- `[Docs & Tests]` Updated README, architecture notes, agent context, and queue/runtime/command regressions for the new stop/reset contract. Impact: the hotfix behavior is documented and covered by the high-risk stop plus queue path.
+
 ## 0.5.0: Command Templates, Domain Boundaries & Queue UX
 
 - `[Queue UX]` Telegram `/status` and `/model` now execute immediately, post-agent-end queue dispatch retries after pi settles idle state, and the status bar shows specific busy labels (`active`, `dispatching`, `queued`, `tool running`, `model`). Reaction priority remains local and applies to text, voice, file, image, and media-group turns without introducing pi steering semantics. Impact: controls do not get stuck behind generation, queued work no longer needs a later Telegram update to unstick, and attachment turns keep predictable ordering.

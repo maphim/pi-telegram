@@ -82,7 +82,7 @@ Use these inside the Telegram DM with your bot:
 - **`/status`**: View session stats, cost, and use inline buttons to change models.
 - **`/model`**: Open the interactive model selector.
 - **`/compact`**: Start session compaction (only works when the session is idle).
-- **`/stop`**: Abort the active run.
+- **`/stop`**: Abort the active run and clear all waiting Telegram queue items.
 
 Telegram command admission is explicit: `/compact`, `/stop`, `/help`, `/start`, `/status`, and `/model` execute immediately. Synthetic model-switch continuation turns still enter the high-priority control lane so they can resume before normal queued prompts when pi becomes safe to dispatch.
 
@@ -102,6 +102,7 @@ Run these inside pi, not Telegram:
 - `👎` removes a waiting turn from the queue. Telegram Bot API does not expose ordinary DM message-deletion events through the polling path used here, so queue removal is bound to the dislike reaction.
 - Reactions apply to any waiting Telegram turn, including text, voice, files, images, and media groups. For media groups, a reaction on any message in the group applies to the whole queued turn.
 - If you edit a Telegram message while it is still waiting in the queue, the queued turn is updated instead of creating a duplicate prompt. Edits after a turn has already started may not affect the active run.
+- Telegram replies to earlier text or caption messages are forwarded as `[reply]` context for normal prompts, while slash commands still parse from the new message text only.
 - Inbound images, albums, and files are saved to `~/.pi/agent/tmp/telegram`. Unhandled local file paths are included in the prompt, handled attachment output is injected into the prompt text, and inbound images are forwarded to pi as image inputs. Inbound downloads default to a 50 MiB limit and can be adjusted with `PI_TELEGRAM_INBOUND_FILE_MAX_BYTES` or `TELEGRAM_MAX_FILE_SIZE_BYTES`.
 - Queue reactions depend on Telegram delivering `message_reaction` updates for your bot and chat type.
 
@@ -114,31 +115,81 @@ Run these inside pi, not Telegram:
   "attachmentHandlers": [
     {
       "type": "voice",
-      "template": "~/.pi/agent/skills/mistral-stt/scripts/transcribe.mjs {file} {lang} {model}",
-      "args": ["file", "lang", "model"],
-      "defaults": {
-        "lang": "ru",
-        "model": "voxtral-mini-latest"
-      }
+      "template": "/path/to/stt1 --file {file} --lang {lang=ru}",
+      "timeout": 30000
     },
     {
       "mime": "audio/*",
-      "template": "~/.pi/agent/skills/groq-stt/scripts/transcribe.mjs {file} {lang} {model}",
-      "args": ["file", "lang", "model"],
-      "defaults": {
-        "lang": "ru",
-        "model": "whisper-large-v3-turbo"
-      }
+      "template": "/path/to/stt2 --file {file} --lang {lang=ru}",
+      "timeout": 30000
     }
   ]
 }
 ```
 
-Matching supports `mime`, `type`, or `match`; wildcards like `audio/*` are accepted. Template placeholders are substituted into command args, not shell text: `{file}` is the downloaded file path, `{mime}` is the MIME type, `{type}` is the Telegram attachment type, and `defaults` can provide additional values such as `{lang}` or `{model}`. Local attachments stay in the prompt under `[attachments] <directory>` with relative file entries; successful handler stdout is added under `[outputs]`; failed handlers record diagnostics and fall back to the next matching handler. The portable command-template contract is documented in [`docs/command-templates.md`](./docs/command-templates.md); Telegram-specific handler config is documented in [`docs/attachment-handlers.md`](./docs/attachment-handlers.md).
+Matching supports `mime`, `type`, or `match`; wildcards like `audio/*` are accepted. Handlers use `template`: a string is one command, and an array is ordered composition. Template placeholders are substituted into command args, not shell text: `{file}` is the downloaded file path, `{mime}` is the MIME type, `{type}` is the Telegram attachment type, and `defaults` or inline defaults such as `{lang=ru}` can provide additional values. Examples use explicit flag-style CLIs for readability; positional script forms are also supported when the script itself supports them. Local attachments stay in the prompt under `[attachments] <directory>` with relative file entries; successful handler stdout is added under `[outputs]`; failed handlers record diagnostics and fall back to the next matching handler. The portable command-template contract is documented in [`docs/command-templates.md`](./docs/command-templates.md); Telegram-specific handler config is documented in [`docs/attachment-handlers.md`](./docs/attachment-handlers.md).
 
 ### Requesting Files
 
-If you ask pi for a file or generated artifact (e.g., _"generate a shell script and attach it"_), pi will call the `telegram_attach` tool, and the extension will send the file alongside its next Telegram reply. Outbound attachments default to a 50 MiB limit and can be adjusted with `PI_TELEGRAM_OUTBOUND_ATTACHMENT_MAX_BYTES` or `TELEGRAM_MAX_ATTACHMENT_SIZE_BYTES`.
+If you ask pi for a file or generated artifact (e.g., _"generate a shell script and attach it"_), pi can call the `telegram_attach` tool, and the extension will send the file alongside its next Telegram reply. `telegram_attach` is the only pi tool registered by `pi-telegram`; use it for ordinary files, not for Telegram-native voice or buttons. Outbound attachments default to a 50 MiB limit and can be adjusted with `PI_TELEGRAM_OUTBOUND_ATTACHMENT_MAX_BYTES` or `TELEGRAM_MAX_ATTACHMENT_SIZE_BYTES`.
+
+### Assistant-Authored Outbound Actions
+
+Assistant replies can include hidden outbound blocks. `telegram_voice` and `telegram_button` are not pi tools; they are assistant-authored HTML comments that the bridge removes from Telegram text and handles after `agent_end`. Recognized blocks must start at column zero on a top-level line outside fenced code, quotes, and lists, so documentation examples remain literal. The agent writes normal Markdown; the extension owns voice generation, button markup, callback routing, and delivery.
+
+#### Voice
+
+Voice blocks synthesize their text and upload it as a native Telegram `sendVoice` OGG/Opus message. Use body form for multiline text, `text="..."` for explicit one-line text with optional attributes, and the colon shorthand for a one-line voice with no attributes. The spoken text may be a concise companion summary, but it does not have to follow that format; write what you want spoken and keep it TTS-friendly:
+
+```md
+Full technical answer stays readable as text.
+
+<!-- telegram_voice lang=ru rate=+30%
+Text to synthesize as a Telegram voice message.
+-->
+
+<!-- telegram_voice lang=ru rate=+30% text="Short spoken companion summary." -->
+
+<!-- telegram_voice: Short spoken companion summary. -->
+```
+
+Outbound voice is disabled unless a matching `outboundHandlers[]` entry is configured. Multiple `telegram_voice` blocks in one reply are synthesized and sent independently, preserving each block's attributes. The bridge uses the same [command-template contract](./docs/command-templates.md) as inbound attachment handlers: split the template into args, substitute placeholders, execute without a shell, and use stdout as the result channel for a single template.
+
+A TTS plus MP3-to-OGG setup can be expressed as `template: [...]`. The bridge provides `{text}`, `{mp3}`, and `{ogg}` to every step; top-level `args`/`defaults` apply to all steps unless a step defines private values, top-level `timeout` wraps the whole sequence, and each step's stdout is passed to the next step's stdin by default. Use `"output": "ogg"` when the artifact path should come from the generated `{ogg}` value instead of final stdout:
+
+```json
+{
+  "outboundHandlers": [
+    {
+      "type": "voice",
+      "template": [
+        "/path/to/tts --text {text} --lang {lang=ru} --rate {rate=+30%} --write-media {mp3}",
+        "ffmpeg -y -i {mp3} -c:a libopus -b:a 32k -ar 16000 -ac 1 -vbr on {ogg}"
+      ],
+      "output": "ogg",
+      "timeout": 60000
+    }
+  ]
+}
+```
+
+#### Buttons
+
+Button blocks attach inline quick replies to the final text. Use one independent `telegram_button` block per action. If the prompt should equal the label, use the colon shorthand. If the prompt differs, use the inline `prompt="..."` attribute for one-line prompts or the body form for multiline prompts:
+
+```md
+I can continue.
+
+<!-- telegram_button label=Continue prompt="Continue with the current plan." -->
+
+<!-- telegram_button label="Show risks"
+List the main risks first.
+-->
+
+<!-- telegram_button: OK -->
+```
+
+Button prompts are routed back into the normal Telegram queue as prompt turns. Keep the opening comment unclosed until the body-ending `-->` for body-form buttons. Closed heads must use `prompt="..."` or the colon shorthand to create a button. Outbound handler details are documented in [`docs/outbound-handlers.md`](./docs/outbound-handlers.md).
 
 ## Streaming
 

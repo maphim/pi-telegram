@@ -13,6 +13,8 @@ import {
   createTelegramMediaGroupDispatchRuntime,
   downloadTelegramMessageFiles,
   extractFirstTelegramMessageText,
+  extractTelegramMessagePromptText,
+  extractTelegramMessagesPromptText,
   extractTelegramMessagesText,
   formatTelegramHistoryText,
   getTelegramMediaGroupKey,
@@ -110,10 +112,49 @@ test("Media helpers extract text, ids, and history summaries", () => {
   assert.equal(extractFirstTelegramMessageText(messages), "first");
   assert.deepEqual(collectTelegramMessageIds(messages), [1, 2]);
   assert.equal(
-    formatTelegramHistoryText("hello", [{ path: "/tmp/demo.txt" }], [
-      "transcript",
-    ]),
+    formatTelegramHistoryText(
+      "hello",
+      [{ path: "/tmp/demo.txt" }],
+      ["transcript"],
+    ),
     "hello\n\n[attachments] /tmp\n- /demo.txt\n\n[outputs]\n- transcript",
+  );
+});
+
+test("Media helpers keep raw text command-safe and add reply context only for prompts", () => {
+  const repliedCommand = {
+    message_id: 1,
+    text: "/status",
+    reply_to_message: { text: "quoted context" },
+  };
+  const captionReply = {
+    message_id: 2,
+    caption: "caption reply",
+    reply_to_message: { caption: "quoted caption" },
+  };
+  assert.equal(extractFirstTelegramMessageText([repliedCommand]), "/status");
+  assert.equal(extractTelegramMessagesText([repliedCommand]), "/status");
+  assert.equal(
+    extractTelegramMessagePromptText(repliedCommand),
+    "/status\n\n[reply] quoted context",
+  );
+  assert.equal(
+    extractTelegramMessagesPromptText([captionReply]),
+    "caption reply\n\n[reply] quoted caption",
+  );
+});
+
+test("Media helpers truncate long reply context for prompt text", () => {
+  const longQuote = `${"a".repeat(1000)} extra`;
+  assert.equal(
+    extractTelegramMessagesPromptText([
+      {
+        message_id: 1,
+        text: "current",
+        reply_to_message: { text: longQuote },
+      },
+    ]),
+    `current\n\n[reply] ${"a".repeat(1000)}…`,
   );
 });
 
@@ -233,11 +274,14 @@ test("Media group controller owns timers, removal, and cleanup", () => {
 test("Media group dispatch runtime handles immediate and grouped messages", async () => {
   const callbacks: Array<() => void> = [];
   const dispatched: Array<{ ids: number[]; ctx: string }> = [];
-  const controller = createTelegramMediaGroupController<{
-    message_id: number;
-    chat: { id: number };
-    media_group_id?: string;
-  }>({
+  const controller = createTelegramMediaGroupController<
+    {
+      message_id: number;
+      chat: { id: number };
+      media_group_id?: string;
+    },
+    string
+  >({
     setTimer: (callback) => {
       callbacks.push(callback);
       return createTestTimer(callbacks.length);

@@ -720,6 +720,21 @@ export interface TelegramAgentEndAssistantResult {
   errorMessage?: string;
 }
 
+export interface TelegramAgentEndOutboundVoiceReply {
+  text: string;
+  lang?: string;
+  rate?: string;
+}
+
+export interface TelegramAgentEndOutboundReplyPlan<TReplyMarkup = unknown> {
+  markdown: string;
+  replyMarkup?: TReplyMarkup;
+  voiceText?: string;
+  voiceReplies?: TelegramAgentEndOutboundVoiceReply[];
+  lang?: string;
+  rate?: string;
+}
+
 export interface TelegramAgentEndRuntimeDeps<
   TTurn extends PendingTelegramTurn,
 > {
@@ -735,11 +750,13 @@ export interface TelegramAgentEndRuntimeDeps<
     chatId: number,
     markdown: string,
     replyToMessageId: number,
+    options?: { replyMarkup?: unknown },
   ) => Promise<boolean>;
   sendMarkdownReply: (
     chatId: number,
     replyToMessageId: number,
     markdown: string,
+    options?: { replyMarkup?: unknown },
   ) => Promise<unknown>;
   sendTextReply: (
     chatId: number,
@@ -747,6 +764,12 @@ export interface TelegramAgentEndRuntimeDeps<
     text: string,
   ) => Promise<unknown>;
   sendQueuedAttachments: (turn: TTurn) => Promise<void>;
+  planOutboundReply?: (markdown: string) => TelegramAgentEndOutboundReplyPlan;
+  sendOutboundReplyArtifacts?: (
+    turn: TTurn,
+    plan: TelegramAgentEndOutboundReplyPlan,
+    options?: { replyToPrompt?: boolean },
+  ) => Promise<void>;
 }
 
 export interface TelegramAgentEndHookRuntimeDeps<
@@ -762,12 +785,17 @@ export interface TelegramAgentEndHookRuntimeDeps<
   resetRuntimeState: () => void;
   updateStatus: (ctx: TContext) => void;
   dispatchNextQueuedTelegramTurn: (ctx: TContext) => void;
+  requestDeferredDispatchNextQueuedTelegramTurn: (
+    dispatch: (ctx: TContext) => void,
+  ) => void;
   clearPreview: (chatId: number) => Promise<void>;
   setPreviewPendingText: (text: string) => void;
   finalizeMarkdownPreview: TelegramAgentEndRuntimeDeps<TTurn>["finalizeMarkdownPreview"];
   sendMarkdownReply: TelegramAgentEndRuntimeDeps<TTurn>["sendMarkdownReply"];
   sendTextReply: TelegramAgentEndRuntimeDeps<TTurn>["sendTextReply"];
   sendQueuedAttachments: (turn: TTurn) => Promise<void>;
+  planOutboundReply?: TelegramAgentEndRuntimeDeps<TTurn>["planOutboundReply"];
+  sendOutboundReplyArtifacts?: TelegramAgentEndRuntimeDeps<TTurn>["sendOutboundReplyArtifacts"];
 }
 
 export interface TelegramAgentEndHookEvent<TMessage> {
@@ -857,7 +885,9 @@ export function createTelegramAgentEndHook<
       resetRuntimeState: deps.resetRuntimeState,
       updateStatus: () => deps.updateStatus(ctx),
       dispatchNextQueuedTelegramTurn: () => {
-        setTimeout(() => deps.dispatchNextQueuedTelegramTurn(ctx), 0);
+        deps.requestDeferredDispatchNextQueuedTelegramTurn(
+          deps.dispatchNextQueuedTelegramTurn,
+        );
       },
       clearPreview: deps.clearPreview,
       setPreviewPendingText: deps.setPreviewPendingText,
@@ -865,6 +895,8 @@ export function createTelegramAgentEndHook<
       sendMarkdownReply: deps.sendMarkdownReply,
       sendTextReply: deps.sendTextReply,
       sendQueuedAttachments: deps.sendQueuedAttachments,
+      planOutboundReply: deps.planOutboundReply,
+      sendOutboundReplyArtifacts: deps.sendOutboundReplyArtifacts,
     });
   };
 }
@@ -873,13 +905,20 @@ export async function handleTelegramAgentEndRuntime<
   TTurn extends PendingTelegramTurn,
 >(deps: TelegramAgentEndRuntimeDeps<TTurn>): Promise<void> {
   const { turn, assistant } = deps;
-  const finalText = assistant.text;
+  const rawFinalText = assistant.text;
+  const outboundReply = rawFinalText
+    ? deps.planOutboundReply?.(rawFinalText)
+    : undefined;
+  const finalText = outboundReply ? outboundReply.markdown : rawFinalText;
+  const hasOutboundArtifacts =
+    !!outboundReply?.voiceText || !!outboundReply?.voiceReplies?.length;
+  const replyMarkup = outboundReply?.replyMarkup;
   deps.resetRuntimeState();
   deps.updateStatus();
   const endPlan = buildTelegramAgentEndPlan({
     hasTurn: !!turn,
     stopReason: assistant.stopReason,
-    hasFinalText: !!finalText,
+    hasFinalText: !!finalText || hasOutboundArtifacts,
     hasQueuedAttachments: (turn?.queuedAttachments.length ?? 0) > 0,
     preserveQueuedTurnsAsHistory: deps.preserveQueuedTurnsAsHistory,
   });
@@ -901,11 +940,13 @@ export async function handleTelegramAgentEndRuntime<
     return;
   }
   if (finalText) deps.setPreviewPendingText(finalText);
+  if (!finalText && hasOutboundArtifacts) await deps.clearPreview(turn.chatId);
   if (endPlan.kind === "text" && finalText) {
     const finalized = await deps.finalizeMarkdownPreview(
       turn.chatId,
       finalText,
       turn.replyToMessageId,
+      { replyMarkup },
     );
     if (!finalized) {
       await deps.clearPreview(turn.chatId);
@@ -913,8 +954,14 @@ export async function handleTelegramAgentEndRuntime<
         turn.chatId,
         turn.replyToMessageId,
         finalText,
+        { replyMarkup },
       );
     }
+  }
+  if (outboundReply && deps.sendOutboundReplyArtifacts) {
+    await deps.sendOutboundReplyArtifacts(turn, outboundReply, {
+      replyToPrompt: !finalText,
+    });
   }
   if (endPlan.shouldSendAttachmentNotice) {
     await deps.sendTextReply(
@@ -978,15 +1025,18 @@ export interface TelegramSessionStateApplier<TQueueItem, TModel> {
   applyShutdownState: (state: TelegramSessionShutdownState<TQueueItem>) => void;
 }
 
-export interface TelegramSessionStartRuntimeDeps<TModel = unknown> {
+export interface TelegramSessionStartRuntimeDeps<TContext, TModel = unknown> {
+  ctx: TContext;
   currentModel: TModel | undefined;
   loadConfig: () => Promise<void>;
   applyState: (state: TelegramSessionStartState<TModel>) => void;
+  bindDeferredDispatchContext?: (ctx: TContext) => void;
   prepareTempDir: () => Promise<unknown>;
   updateStatus: () => void;
 }
 
 export interface TelegramSessionShutdownRuntimeDeps<TQueueItem> {
+  unbindDeferredDispatchContext?: () => void;
   applyState: (state: TelegramSessionShutdownState<TQueueItem>) => void;
   clearPendingMediaGroups: () => void;
   clearModelMenuState: () => void;
@@ -1005,8 +1055,10 @@ export interface TelegramSessionLifecycleHookRuntimeDeps<
   getCurrentModel: (ctx: TContext) => TModel | undefined;
   loadConfig: () => Promise<void>;
   applySessionStartState: (state: TelegramSessionStartState<TModel>) => void;
+  bindDeferredDispatchContext?: (ctx: TContext) => void;
   prepareTempDir: () => Promise<unknown>;
   updateStatus: (ctx: TContext) => void;
+  unbindDeferredDispatchContext?: () => void;
   applySessionShutdownState: (
     state: TelegramSessionShutdownState<TQueueItem>,
   ) => void;
@@ -1061,6 +1113,7 @@ export interface TelegramQueueMutationControllerDeps<
 export interface TelegramQueueMutationController<TContext> {
   append: (item: TelegramQueueItem<TContext>, ctx: TContext) => void;
   reorder: (ctx: TContext) => void;
+  clear: (ctx: TContext) => number;
   removeByMessageIds: (messageIds: number[], ctx: TContext) => number;
   clearPriorityByMessageId: (messageId: number, ctx: TContext) => boolean;
   prioritizeByMessageId: (messageId: number, ctx: TContext) => boolean;
@@ -1142,18 +1195,20 @@ export function buildTelegramSessionShutdownState<
   };
 }
 
-export async function startTelegramSessionRuntime<TModel = unknown>(
-  deps: TelegramSessionStartRuntimeDeps<TModel>,
+export async function startTelegramSessionRuntime<TContext, TModel = unknown>(
+  deps: TelegramSessionStartRuntimeDeps<TContext, TModel>,
 ): Promise<void> {
   await deps.loadConfig();
   deps.applyState(buildTelegramSessionStartState(deps.currentModel));
   await deps.prepareTempDir();
+  deps.bindDeferredDispatchContext?.(deps.ctx);
   deps.updateStatus();
 }
 
 export async function shutdownTelegramSessionRuntime<TQueueItem>(
   deps: TelegramSessionShutdownRuntimeDeps<TQueueItem>,
 ): Promise<void> {
+  deps.unbindDeferredDispatchContext?.();
   deps.applyState(buildTelegramSessionShutdownState<TQueueItem>());
   deps.clearPendingMediaGroups();
   deps.clearModelMenuState();
@@ -1192,8 +1247,10 @@ export function createTelegramSessionLifecycleRuntime<
     getCurrentModel: deps.getCurrentModel,
     loadConfig: deps.loadConfig,
     applySessionStartState: stateApplier.applyStartState,
+    bindDeferredDispatchContext: deps.bindDeferredDispatchContext,
     prepareTempDir: deps.prepareTempDir,
     updateStatus: deps.updateStatus,
+    unbindDeferredDispatchContext: deps.unbindDeferredDispatchContext,
     applySessionShutdownState: stateApplier.applyShutdownState,
     clearPendingMediaGroups: deps.clearPendingMediaGroups,
     clearModelMenuState: deps.clearModelMenuState,
@@ -1218,9 +1275,11 @@ export function createTelegramSessionLifecycleHooks<
     ): Promise<void> => {
       try {
         await startTelegramSessionRuntime({
+          ctx,
           currentModel: deps.getCurrentModel(ctx),
           loadConfig: deps.loadConfig,
           applyState: deps.applySessionStartState,
+          bindDeferredDispatchContext: deps.bindDeferredDispatchContext,
           prepareTempDir: deps.prepareTempDir,
           updateStatus: () => deps.updateStatus(ctx),
         });
@@ -1232,6 +1291,7 @@ export function createTelegramSessionLifecycleHooks<
     onSessionShutdown: async (): Promise<void> => {
       try {
         await shutdownTelegramSessionRuntime<TQueueItem>({
+          unbindDeferredDispatchContext: deps.unbindDeferredDispatchContext,
           applyState: deps.applySessionShutdownState,
           clearPendingMediaGroups: deps.clearPendingMediaGroups,
           clearModelMenuState: deps.clearModelMenuState,
@@ -1262,6 +1322,7 @@ export function createTelegramQueueMutationController<TContext>(
     append: (item, ctx) =>
       appendTelegramQueueItemRuntime(item, buildRuntimeDeps(ctx)),
     reorder: (ctx) => reorderTelegramQueueItemsRuntime(buildRuntimeDeps(ctx)),
+    clear: (ctx) => clearTelegramQueueItemsRuntime(buildRuntimeDeps(ctx)),
     removeByMessageIds: (messageIds, ctx) =>
       removeTelegramQueueItemsByMessageIdsRuntime(
         messageIds,
@@ -1289,6 +1350,16 @@ export function reorderTelegramQueueItemsRuntime<TContext>(
     [...deps.getQueuedItems()].sort(compareTelegramQueueItems),
   );
   deps.updateStatus(deps.ctx);
+}
+
+export function clearTelegramQueueItemsRuntime<TContext>(
+  deps: TelegramQueueMutationRuntimeDeps<TContext>,
+): number {
+  const removedCount = deps.getQueuedItems().length;
+  if (removedCount === 0) return 0;
+  deps.setQueuedItems([]);
+  deps.updateStatus(deps.ctx);
+  return removedCount;
 }
 
 export function removeTelegramQueueItemsByMessageIdsRuntime<TContext>(
@@ -1436,6 +1507,68 @@ export async function executeTelegramControlItemRuntime<TContext>(
   }
 }
 
+// --- Deferred Dispatch Runtime ---
+
+export interface TelegramDeferredQueueDispatchRuntimeDeps extends TelegramRuntimeEventRecorderPort {
+  delayMs?: number;
+  setTimer?: (
+    callback: () => void,
+    ms: number,
+  ) => ReturnType<typeof setTimeout>;
+  clearTimer?: (timer: ReturnType<typeof setTimeout>) => void;
+}
+
+export interface TelegramDeferredQueueDispatchRuntime<TContext = unknown> {
+  bind: (ctx: TContext) => void;
+  unbind: () => void;
+  isBound: () => boolean;
+  request: (dispatchNextQueuedTelegramTurn: (ctx: TContext) => void) => void;
+}
+
+export function createTelegramDeferredQueueDispatchRuntime<TContext = unknown>(
+  deps: TelegramDeferredQueueDispatchRuntimeDeps = {},
+): TelegramDeferredQueueDispatchRuntime<TContext> {
+  let boundContext: TContext | undefined;
+  let generation = 0;
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+  const delayMs = deps.delayMs ?? 0;
+  const setTimer =
+    deps.setTimer ??
+    ((callback: () => void, ms: number): ReturnType<typeof setTimeout> =>
+      setTimeout(callback, ms));
+  const clearTimer =
+    deps.clearTimer ??
+    ((timer: ReturnType<typeof setTimeout>): void => clearTimeout(timer));
+  const clearTimers = (): void => {
+    for (const timer of timers) clearTimer(timer);
+    timers.clear();
+  };
+  return {
+    bind: (ctx) => {
+      boundContext = ctx;
+      generation += 1;
+    },
+    unbind: () => {
+      boundContext = undefined;
+      generation += 1;
+      clearTimers();
+    },
+    isBound: () => boundContext !== undefined,
+    request: (dispatchNextQueuedTelegramTurn) => {
+      if (boundContext === undefined) return;
+      const scheduledGeneration = generation;
+      let timer: ReturnType<typeof setTimeout>;
+      timer = setTimer(() => {
+        timers.delete(timer);
+        if (generation !== scheduledGeneration || boundContext === undefined)
+          return;
+        dispatchNextQueuedTelegramTurn(boundContext);
+      }, delayMs);
+      timers.add(timer);
+    },
+  };
+}
+
 // --- Dispatch Runtime ---
 
 export interface TelegramDispatchRuntimeDeps<TContext = unknown> {
@@ -1462,6 +1595,7 @@ export interface TelegramQueueDispatchControllerDeps<
   getQueuedItems: () => TelegramQueueItem<TContext>[];
   setQueuedItems: (items: TelegramQueueItem<TContext>[]) => void;
   canDispatch: (ctx: TContext) => boolean;
+  hasDispatchContext?: () => boolean;
   updateStatus: (ctx: TContext, error?: string) => void;
   sendTextReply: TelegramControlRuntimeDeps<TContext>["sendTextReply"];
   onPromptDispatchStart: (ctx: TContext, chatId: number) => void;
@@ -1513,6 +1647,7 @@ export function createTelegramQueueDispatchRuntime<TContext = unknown>(
       isIdle: deps.isIdle,
       hasPendingMessages: deps.hasPendingMessages,
     }),
+    hasDispatchContext: deps.hasDispatchContext,
     updateStatus: deps.updateStatus,
     sendTextReply: deps.sendTextReply,
     onPromptDispatchStart: deps.onPromptDispatchStart,
@@ -1528,6 +1663,7 @@ export function createTelegramQueueDispatchController<TContext = unknown>(
   let controlDispatchPending = false;
   const controller: TelegramQueueDispatchController<TContext> = {
     dispatchNext: (ctx) => {
+      if (deps.hasDispatchContext && !deps.hasDispatchContext()) return;
       if (controlDispatchPending) {
         deps.updateStatus(ctx);
         return;
@@ -1549,6 +1685,7 @@ export function createTelegramQueueDispatchController<TContext = unknown>(
             recordRuntimeEvent: deps.recordRuntimeEvent,
             onSettled: () => {
               controlDispatchPending = false;
+              if (deps.hasDispatchContext && !deps.hasDispatchContext()) return;
               deps.updateStatus(ctx);
               controller.dispatchNext(ctx);
             },

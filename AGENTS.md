@@ -57,7 +57,10 @@
 - Queued items have explicit kinds and lanes so prompt turns and synthetic control actions can share one ordering model
 - Keep queue admission contract explicit and validated: immediate commands execute without entering the queue, control commands enter the `control` lane, normal prompts enter the `default` lane, reaction-promoted prompts enter the `priority` lane, and queue append/planning paths should reject invalid kind/lane pairings predictably
 - Dispatch must still respect active turns, pending prompt dispatch, unsettled control-item execution, compaction, and pi pending-message state
-- Long-lived timers, pollers, and ownership watchers must not depend on live pi context objects after session replacement. Snapshot primitive identity such as `cwd` when installing a watcher, stop local timers during session shutdown, and catch stale-context status updates during async cleanup.
+- Telegram `/stop` is a queue-reset command: clear pending model-switch state, all queued Telegram items, and aborted-turn history preservation before aborting the active run so the next Telegram message starts from a clean queue.
+- Telegram `reply_to_message` context is prompt-only: preserve raw new-message text/caption for slash-command parsing, then inject quoted text/caption as `[reply]` context only while building or editing queued prompt turns.
+- Long-lived timers, pollers, and ownership watchers must not depend on live pi context objects after session replacement. Snapshot primitive identity such as `cwd` when installing a watcher, stop local timers during session shutdown, and prefer lifecycle-bound context ports over stale-context catch wrappers.
+- Deferred queue dispatch must be session-bound: bind on `session_start`, unbind/cancel on `session_shutdown`, and resolve the current bound context only when the deferred callback fires.
 - Prompt items should remain in the queue until `agent_start` consumes the dispatched turn; removing them earlier breaks active-turn binding, preview delivery, and end-of-turn follow-up behavior
 - In-flight `/model` switching is supported only for Telegram-owned active turns and is implemented as set-model plus synthetic continuation turn plus abort
 - If a tool call is active during in-flight `/model` switching, the abort is delayed until that tool finishes instead of interrupting the tool mid-flight
@@ -67,6 +70,10 @@
 - Telegram replies render through Telegram HTML, not raw Markdown
 - Real code blocks must stay literal and escaped
 - `telegram_attach` is the canonical outbound file-delivery path for Telegram-originated requests
+- Telegram delivery strips top-level HTML comments from preview/final text; column-zero top-level `<!-- telegram_voice ... -->` and `<!-- telegram_button ... -->` blocks are special outbound comments handled after `agent_end` without requiring agent-side transport tool calls, while comments inside code, quotes, lists, or indented examples stay literal
+- `telegram_voice` and `telegram_button` are not pi tools; keep prompts/docs explicit that agents should author markup while the extension owns command-template voice pipelines, button routing, and Telegram delivery
+- `telegram_voice` text is arbitrary TTS-target text: use body form for multiline text, `<!-- telegram_voice text="Short summary" -->` for explicit one-line text, or `<!-- telegram_voice: Short summary -->` for one-line text with no attributes
+- `telegram_button` has three canonical forms: `<!-- telegram_button: OK -->` for label-only buttons, `<!-- telegram_button label=Continue prompt="Continue with the current plan." -->` for one-line prompts, or `<!-- telegram_button label="Show risks"\nList the main risks first.\n-->` for multiline prompts
 
 ## 6. Engineering Conventions
 
@@ -95,8 +102,8 @@
 The canonical detailed ownership map lives in [`docs/architecture.md`](./docs/architecture.md). Keep this section as a compact agent-facing index, not a second copy of the full map.
 
 - Scheduling and lifecycle: `queue`, `runtime`, `lifecycle`, `locks`
-- Telegram transport and inbound flow: `api`, `polling`, `updates`, `routing`, `media`, `turns`, `handlers`, `config`, `setup`
-- Response surfaces: `preview`, `replies`, `rendering`, `attachments`, `status`
+- Telegram transport and inbound flow: `api`, `polling`, `updates`, `routing`, `media`, `turns`, `attachment-handlers`, `config`, `setup`
+- Response surfaces: `preview`, `replies`, `rendering`, `attachments`, `outbound-handlers`, `status`
 - Controls and model UI: `commands`, `menu`, `model`, `prompts`
 - Pi SDK boundary: `pi` owns direct pi imports and bound extension API ports
 
@@ -126,7 +133,9 @@ The canonical detailed ownership map lives in [`docs/architecture.md`](./docs/ar
 - For `/telegram-setup`, prefer the locally saved bot token over environment variables on repeat setup runs; env vars are the bootstrap path when no local token exists
 - Status/model/thinking controls are driven through Telegram inline keyboards and callback queries
 - Inbound files may become pi image inputs or configured attachment-handler text before queueing; outbound files must flow through `telegram_attach`
-- Inbound attachment handlers use command templates as the standard integration contract; do not couple handler execution to another extension's private registry or config format unless pi exposes a public extension-callable `executeTool(name, args)` API
+- Inbound attachment handlers and command-backed outbound handlers use command templates as the standard integration contract; built-in outbound buttons use inline keyboards plus callback routing because no external command execution is needed
+- Command templates stay compact and shell-free: no `command` field, no shell execution, inline defaults are allowed as `{name=default}`, `template` may be a string or an ordered composition array, only `args`/`defaults` inherit into leaves, top-level `timeout` wraps composed sequences, stdout pipes to the next step's stdin by default, and multi-step work should use `template: [...]` rather than provider-specific fields; `pipe` is only a legacy local alias
+- Command-template documentation examples should use portable executable placeholders such as `/path/to/stt` and `/path/to/tts`, not host-local skill paths or machine-specific install locations
 
 ## 9. Pre-Task Preparation Protocol
 

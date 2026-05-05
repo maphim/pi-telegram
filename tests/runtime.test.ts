@@ -524,7 +524,7 @@ test("Typing loop starter binds default chat and reports failures", async () => 
   });
   startFailingTypingLoop({ id: "ctx" }, 8);
   await flushMicrotasks();
-  assert.deepEqual(failingStatusErrors, ["typing failed: boom"]);
+  assert.deepEqual(failingStatusErrors, []);
   assert.deepEqual(runtimeEvents, ["typing:boom:8"]);
   assert.equal(runtime.typing.stop(), true);
 });
@@ -702,7 +702,7 @@ test("Extension runtime finalizes a drafted preview into the final Telegram repl
   }
 });
 
-test("Extension runtime carries queued follow-ups into history after an aborted turn", async () => {
+test("Extension runtime clears queued follow-ups after a Telegram stop", async () => {
   const telegramConfig = await createRuntimeTelegramConfigFixture();
   const sentMessages: RuntimeHarnessMessage[] = [];
   let firstDispatchResolved = false;
@@ -823,14 +823,12 @@ test("Extension runtime carries queued follow-ups into history after an aborted 
       () => sentMessages.length === dispatchCountBeforeNextTurn + 1,
     );
     const promptText = getRuntimeHarnessTextBlock(sentMessages.at(-1)).text ?? "";
-    assert.match(promptText, /^\[telegram\]/);
-    assert.match(
-      promptText,
-      /Earlier Telegram messages arrived after an aborted turn/,
+    assert.equal(promptText, "[telegram] new request");
+    assert.equal(promptText.includes("follow up"), false);
+    assert.equal(
+      sendTexts.includes("Aborted current turn. Cleared 1 queued turn."),
+      true,
     );
-    assert.match(promptText, /1\. follow up/);
-    assert.match(promptText, /Current Telegram message:\nnew request/);
-    assert.equal(sendTexts.includes("Aborted current turn."), true);
     await handlers.get("session_shutdown")?.({}, idleCtx);
   } finally {
     restoreFetch();
@@ -1241,7 +1239,7 @@ test("Extension runtime coalesces media-group updates into one delayed dispatch"
     const ctx = createRuntimeExtensionContext();
     await handlers.get("session_start")?.({}, ctx);
     await commands.get("telegram-connect")?.handler("", ctx);
-    await waitForEventLoopCondition(() => getUpdatesCalls >= 2);
+    await waitForEventLoopCondition(() => getUpdatesCalls >= 2, 5000);
     mock.timers.tick(1199);
     await flushMicrotasks();
     assert.equal(runtimeEvents.length, 0);

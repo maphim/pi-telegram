@@ -25,6 +25,11 @@ import {
   runTelegramSetup,
 } from "../lib/setup.ts";
 
+test("Telegram config helper returns empty config when file is absent", async () => {
+  const agentDir = await mkdtemp(join(tmpdir(), "pi-telegram-missing-config-"));
+  assert.deepEqual(await readTelegramConfig(join(agentDir, "telegram.json")), {});
+});
+
 test("Telegram config helpers persist and reload config", async () => {
   const agentDir = await mkdtemp(join(tmpdir(), "pi-telegram-config-"));
   const configPath = join(agentDir, "telegram.json");
