@@ -4,6 +4,8 @@
  * Owns Telegram slash-command normalization, bot command metadata, and pi-side command registration behind runtime ports
  */
 
+import { execSync } from "node:child_process";
+import * as fs from "node:fs";
 import { pairTelegramUserIfNeeded } from "./config.ts";
 import type { ExtensionAPI, ExtensionCommandContext } from "./pi.ts";
 import {
@@ -260,6 +262,7 @@ export type TelegramCommandAction =
   | { kind: "compact"; executionMode: "immediate" }
   | { kind: "status"; executionMode: "immediate" }
   | { kind: "model"; executionMode: "immediate" }
+  | { kind: "restart"; executionMode: "immediate" }
   | { kind: "thinking"; executionMode: "immediate" }
   | {
       kind: "help";
@@ -279,6 +282,7 @@ export interface TelegramCommandActionDeps<TMessage, TContext> {
   handleStatus: (message: TMessage, ctx: TContext) => Promise<void>;
   handleModel: (message: TMessage, ctx: TContext) => Promise<void>;
   handleThinking: (message: TMessage, ctx: TContext) => Promise<void>;
+  handleRestart: (message: TMessage, ctx: TContext) => Promise<void>;
   handleHelp: (
     message: TMessage,
     commandName: "help" | "start",
@@ -1052,6 +1056,46 @@ async function handleTelegramCommandRuntime<
           openModelMenu: (controlCtx) =>
             deps.openModelMenu(nextMessage, controlCtx),
         });
+      },
+      handleRestart: async (nextMessage, commandCtx) => {
+        const sendToRestart = sendReplyFor(nextMessage);
+        let costStr = "$?.???";
+        let sm;
+        try {
+          const ctxAny = commandCtx;
+          sm = ctxAny["sessionManager"];
+          if (sm && typeof sm.getEntries === "function") {
+            const entries = sm.getEntries();
+            let total = 0;
+            for (const e of entries) {
+              const c = e.message?.usage?.cost?.total;
+              if (typeof c === "number") total += c;
+            }
+            costStr = total.toFixed(4);
+            // AAAK context summary - single line, one msg length
+            try {
+              let lastMsg = "";
+              for (const e of entries.slice().reverse()) {
+                if (e.type === "message" && e.message?.role === "user" && Array.isArray(e.message.content)) {
+                  const txt = e.message.content.map((c) => c.text ?? "").filter(Boolean).join(" ").replace(/[|\n]/g, " ").trim();
+                  if (txt) { lastMsg = txt.slice(0, 80); break; }
+                }
+              }
+              const msgCount = entries.filter((e) => e.type === "message").length;
+              let summary = `turns=${msgCount}|cost=${costStr}`;
+              if (lastMsg) summary += `|last=${lastMsg}`;
+              fs.writeFileSync("/tmp/pi-telegram-context-summary", summary, "utf-8");
+            } catch {}
+          }
+        } catch {}
+        try { fs.writeFileSync("/tmp/pi-force-new-session", "1", "utf-8"); } catch {}
+        try { fs.writeFileSync("/tmp/pi-telegram-restart-marker", costStr, "utf-8"); } catch {}
+        await sendToRestart(`🔄 Restarting pi-telegram...\n\n📊 Previous session cost: ${costStr}\n✅ Fresh session starting - cost reset to $0.0000`);
+        setTimeout(() => {
+          try {
+            execSync("systemctl --user restart pi-telegram", { timeout: 5000 });
+          } catch {}
+        }, 1000);
       },
       handleThinking: async (nextMessage, commandCtx) => {
         await deps.openThinkingMenu(nextMessage, commandCtx);
