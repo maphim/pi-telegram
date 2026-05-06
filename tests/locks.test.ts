@@ -21,7 +21,10 @@ function createTempLockPath(): { dir: string; path: string } {
   return { dir, path: join(dir, "locks.json") };
 }
 
-async function waitForCondition(predicate: () => boolean, timeoutMs = 250): Promise<void> {
+async function waitForCondition(
+  predicate: () => boolean,
+  timeoutMs = 250,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (predicate()) return;
@@ -84,7 +87,10 @@ test("Lock runtime preserves other extension keys and refuses live external owne
 test("Lock runtime replaces stale owners", () => {
   const temp = createTempLockPath();
   try {
-    writeFileSync(temp.path, JSON.stringify({ [TELEGRAM_LOCK_KEY]: { pid: 99 } }));
+    writeFileSync(
+      temp.path,
+      JSON.stringify({ [TELEGRAM_LOCK_KEY]: { pid: 99 } }),
+    );
     const lock = createTelegramLockRuntime({
       locksPath: temp.path,
       pid: 10,
@@ -106,7 +112,10 @@ test("Locked polling runtime can force takeover of live external owners", async 
   const temp = createTempLockPath();
   try {
     const events: string[] = [];
-    writeFileSync(temp.path, JSON.stringify({ [TELEGRAM_LOCK_KEY]: { pid: 99, cwd: "/old" } }));
+    writeFileSync(
+      temp.path,
+      JSON.stringify({ [TELEGRAM_LOCK_KEY]: { pid: 99, cwd: "/old" } }),
+    );
     const lock = createTelegramLockRuntime({
       locksPath: temp.path,
       pid: 10,
@@ -130,10 +139,14 @@ test("Locked polling runtime can force takeover of live external owners", async 
       ok: false,
       canTakeover: true,
       owner: "pid 99, cwd /old",
-      message: "Telegram bridge is active in another pi instance (pid 99, cwd /old).",
+      message:
+        "Telegram bridge is active in another π instance (pid 99, cwd /old).",
     });
     const moved = await runtime.start({ cwd: "/new" }, { force: true });
-    assert.deepEqual(moved, { ok: true, message: "Telegram bridge connected." });
+    assert.deepEqual(moved, {
+      ok: true,
+      message: "Telegram bridge connected.",
+    });
     assert.deepEqual(readLocks(temp.path)[TELEGRAM_LOCK_KEY], {
       pid: 10,
       cwd: "/new",
@@ -157,7 +170,10 @@ test("Locked polling runtime releases ownership when setup is missing", async ()
       updateStatus: () => undefined,
     });
     const started = await runtime.start({ cwd: "/repo" });
-    assert.deepEqual(started, { ok: false, message: "Telegram bot is not configured." });
+    assert.deepEqual(started, {
+      ok: false,
+      message: "Telegram bot is not configured.",
+    });
     assert.deepEqual(readLocks(temp.path), {});
   } finally {
     rmSync(temp.dir, { recursive: true, force: true });
@@ -168,7 +184,10 @@ test("Locked polling runtime auto-starts only from an existing owned lock", asyn
   const temp = createTempLockPath();
   try {
     const events: string[] = [];
-    writeFileSync(temp.path, JSON.stringify({ [TELEGRAM_LOCK_KEY]: { pid: 10, cwd: "/repo" } }));
+    writeFileSync(
+      temp.path,
+      JSON.stringify({ [TELEGRAM_LOCK_KEY]: { pid: 10, cwd: "/repo" } }),
+    );
     const lock = createTelegramLockRuntime({ locksPath: temp.path, pid: 10 });
     const runtime = createTelegramLockedPollingRuntime({
       lock,
@@ -230,7 +249,11 @@ test("Locked polling runtime stops after ownership loss without live context", a
   const temp = createTempLockPath();
   try {
     const events: string[] = [];
-    const runtimeEvents: { category: string; phase: unknown; message: string }[] = [];
+    const runtimeEvents: {
+      category: string;
+      phase: unknown;
+      message: string;
+    }[] = [];
     const ctx = { cwd: "/repo" };
     const lock = createTelegramLockRuntime({ locksPath: temp.path, pid: 10 });
     const runtime = createTelegramLockedPollingRuntime({
@@ -268,7 +291,10 @@ test("Locked polling runtime resumes stale same-cwd ownership after process rest
   const temp = createTempLockPath();
   try {
     const events: string[] = [];
-    writeFileSync(temp.path, JSON.stringify({ [TELEGRAM_LOCK_KEY]: { pid: 99, cwd: "/repo" } }));
+    writeFileSync(
+      temp.path,
+      JSON.stringify({ [TELEGRAM_LOCK_KEY]: { pid: 99, cwd: "/repo" } }),
+    );
     const lock = createTelegramLockRuntime({
       locksPath: temp.path,
       pid: 10,
@@ -303,7 +329,10 @@ test("Locked polling runtime does not claim stale ownership from another cwd dur
   const temp = createTempLockPath();
   try {
     const events: string[] = [];
-    writeFileSync(temp.path, JSON.stringify({ [TELEGRAM_LOCK_KEY]: { pid: 99, cwd: "/other" } }));
+    writeFileSync(
+      temp.path,
+      JSON.stringify({ [TELEGRAM_LOCK_KEY]: { pid: 99, cwd: "/other" } }),
+    );
     const lock = createTelegramLockRuntime({
       locksPath: temp.path,
       pid: 10,

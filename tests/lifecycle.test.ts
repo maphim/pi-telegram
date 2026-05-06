@@ -142,7 +142,10 @@ test("Lifecycle helpers register pi hooks and delegate to handlers", async () =>
     ctx,
   );
   await getRequiredLifecycleHandler(harness.handlers, "message_start")({}, ctx);
-  await getRequiredLifecycleHandler(harness.handlers, "message_update")({}, ctx);
+  await getRequiredLifecycleHandler(harness.handlers, "message_update")(
+    {},
+    ctx,
+  );
   await getRequiredLifecycleHandler(harness.handlers, "agent_end")({}, ctx);
   assert.deepEqual(beforeAgentStartResult, { systemPrompt: "prompt" });
   assert.deepEqual(events, [

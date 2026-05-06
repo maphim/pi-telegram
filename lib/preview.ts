@@ -1,5 +1,6 @@
 /**
  * Telegram preview streaming helpers
+ * Zones: telegram outbound, streaming preview, rendering
  * Owns preview transport selection, runtime updates, and preview finalization
  */
 
@@ -44,9 +45,11 @@ export interface TelegramPreviewRuntimeState extends TelegramPreviewState {
 }
 
 export type TelegramSentPreviewMessage = TelegramSentMessage;
-export type TelegramPreviewReplyMarkup = any;
+export type TelegramPreviewReplyMarkup = unknown;
 
-export interface TelegramPreviewRuntimeDeps {
+export interface TelegramPreviewRuntimeDeps<
+  TReplyMarkup = TelegramPreviewReplyMarkup,
+> {
   getState: () => TelegramPreviewRuntimeState | undefined;
   setState: (state: TelegramPreviewRuntimeState | undefined) => void;
   clearScheduledFlush: (state: TelegramPreviewRuntimeState) => void;
@@ -78,21 +81,25 @@ export interface TelegramPreviewRuntimeDeps {
   sendRenderedChunks: (
     chatId: number,
     chunks: TelegramRenderedChunk[],
-    options?: { replyMarkup?: TelegramPreviewReplyMarkup },
+    options?: { replyMarkup?: TReplyMarkup },
   ) => Promise<number | undefined>;
   editRenderedMessage: (
     chatId: number,
     messageId: number,
     chunks: TelegramRenderedChunk[],
-    options?: { replyMarkup?: TelegramPreviewReplyMarkup },
+    options?: { replyMarkup?: TReplyMarkup },
   ) => Promise<number | undefined>;
+  canSend?: () => boolean;
 }
 
 export interface TelegramPreviewActiveTurn {
   chatId: number;
 }
 
-export interface TelegramAssistantMessagePreviewStartDeps<TMessage> {
+export interface TelegramAssistantMessagePreviewStartDeps<
+  TMessage,
+  TReplyMarkup = TelegramPreviewReplyMarkup,
+> {
   getActiveTurn: () => TelegramPreviewActiveTurn | undefined;
   isAssistantMessage: (message: TMessage) => boolean;
   getState: () => TelegramPreviewRuntimeState | undefined;
@@ -102,6 +109,8 @@ export interface TelegramAssistantMessagePreviewStartDeps<TMessage> {
   finalizeMarkdownPreview: (
     chatId: number,
     markdown: string,
+    replyToMessageId?: number,
+    options?: { replyMarkup?: TReplyMarkup },
   ) => Promise<boolean>;
 }
 
@@ -115,9 +124,11 @@ export interface TelegramAssistantMessagePreviewUpdateDeps<TMessage> {
   schedulePreviewFlush: (chatId: number) => void;
 }
 
-export type TelegramAssistantMessagePreviewHookDeps<TMessage> =
-  TelegramAssistantMessagePreviewStartDeps<TMessage> &
-    TelegramAssistantMessagePreviewUpdateDeps<TMessage>;
+export type TelegramAssistantMessagePreviewHookDeps<
+  TMessage,
+  TReplyMarkup = TelegramPreviewReplyMarkup,
+> = TelegramAssistantMessagePreviewStartDeps<TMessage, TReplyMarkup> &
+  TelegramAssistantMessagePreviewUpdateDeps<TMessage>;
 
 export interface TelegramAssistantMessagePreviewHookEvent<TMessage> {
   message: TMessage;
@@ -132,7 +143,9 @@ export interface TelegramAssistantMessagePreviewHooks<TMessage> {
   ) => Promise<void>;
 }
 
-export interface TelegramPreviewControllerDeps {
+export interface TelegramPreviewControllerDeps<
+  TReplyMarkup = TelegramPreviewReplyMarkup,
+> {
   getDefaultReplyToMessageId?: () => number | undefined;
   maxMessageLength?: number;
   renderPreviewText?: (markdown: string) => string;
@@ -162,14 +175,15 @@ export interface TelegramPreviewControllerDeps {
     chatId: number,
     chunks: TelegramRenderedChunk[],
     replyToMessageId: number | undefined,
-    options?: { replyMarkup?: TelegramPreviewReplyMarkup },
+    options?: { replyMarkup?: TReplyMarkup },
   ) => Promise<number | undefined>;
   editRenderedMessage: (
     chatId: number,
     messageId: number,
     chunks: TelegramRenderedChunk[],
-    options?: { replyMarkup?: TelegramPreviewReplyMarkup },
+    options?: { replyMarkup?: TReplyMarkup },
   ) => Promise<number | undefined>;
+  canSend?: () => boolean;
   throttleMs?: number;
   maxDraftId?: number;
   setTimer?: (
@@ -179,7 +193,9 @@ export interface TelegramPreviewControllerDeps {
   clearTimer?: (timer: ReturnType<typeof setTimeout>) => void;
 }
 
-export interface TelegramPreviewController {
+export interface TelegramPreviewController<
+  TReplyMarkup = TelegramPreviewReplyMarkup,
+> {
   getState: () => TelegramPreviewRuntimeState | undefined;
   setState: (state: TelegramPreviewRuntimeState | undefined) => void;
   setPendingText: (text: string) => void;
@@ -193,7 +209,7 @@ export interface TelegramPreviewController {
     chatId: number,
     markdown: string,
     replyToMessageId?: number,
-    options?: { replyMarkup?: TelegramPreviewReplyMarkup },
+    options?: { replyMarkup?: TReplyMarkup },
   ) => Promise<boolean>;
 }
 
@@ -230,27 +246,31 @@ export function createTelegramPreviewMessageTransport(
   };
 }
 
-export interface TelegramPreviewRenderedChunkTransportDeps {
+export interface TelegramPreviewRenderedChunkTransportDeps<
+  TReplyMarkup = TelegramPreviewReplyMarkup,
+> {
   sendRenderedChunks: (
     chatId: number,
     chunks: TelegramRenderedChunk[],
     options?: {
       replyToMessageId?: number;
-      replyMarkup?: TelegramPreviewReplyMarkup;
+      replyMarkup?: TReplyMarkup;
     },
   ) => Promise<number | undefined>;
   editRenderedMessage: (
     chatId: number,
     messageId: number,
     chunks: TelegramRenderedChunk[],
-    options?: { replyMarkup?: TelegramPreviewReplyMarkup },
+    options?: { replyMarkup?: TReplyMarkup },
   ) => Promise<number | undefined>;
 }
 
-export function createTelegramPreviewRenderedChunkTransport(
-  deps: TelegramPreviewRenderedChunkTransportDeps,
+export function createTelegramPreviewRenderedChunkTransport<
+  TReplyMarkup = TelegramPreviewReplyMarkup,
+>(
+  deps: TelegramPreviewRenderedChunkTransportDeps<TReplyMarkup>,
 ): Pick<
-  TelegramPreviewControllerDeps,
+  TelegramPreviewControllerDeps<TReplyMarkup>,
   "sendRenderedChunks" | "editRenderedMessage"
 > {
   return {
@@ -264,19 +284,23 @@ export function createTelegramPreviewRenderedChunkTransport(
   };
 }
 
-export type TelegramPreviewControllerRuntimeDeps = Omit<
-  TelegramPreviewControllerDeps,
+export type TelegramPreviewControllerRuntimeDeps<
+  TReplyMarkup = TelegramPreviewReplyMarkup,
+> = Omit<
+  TelegramPreviewControllerDeps<TReplyMarkup>,
   | "sendMessage"
   | "editMessageText"
   | "sendRenderedChunks"
   | "editRenderedMessage"
 > &
   TelegramPreviewMessageTransportDeps &
-  TelegramPreviewRenderedChunkTransportDeps;
+  TelegramPreviewRenderedChunkTransportDeps<TReplyMarkup>;
 
-export function createTelegramPreviewControllerRuntime(
-  deps: TelegramPreviewControllerRuntimeDeps,
-): TelegramPreviewController {
+export function createTelegramPreviewControllerRuntime<
+  TReplyMarkup = TelegramPreviewReplyMarkup,
+>(
+  deps: TelegramPreviewControllerRuntimeDeps<TReplyMarkup>,
+): TelegramPreviewController<TReplyMarkup> {
   return createTelegramPreviewController({
     getDefaultReplyToMessageId: deps.getDefaultReplyToMessageId,
     maxMessageLength: deps.maxMessageLength,
@@ -302,18 +326,25 @@ export function createTelegramPreviewControllerRuntime(
 
 export interface TelegramAssistantPreviewRuntimeDeps<
   TMessage,
-> extends TelegramPreviewControllerRuntimeDeps {
+  TReplyMarkup = TelegramPreviewReplyMarkup,
+> extends TelegramPreviewControllerRuntimeDeps<TReplyMarkup> {
   getActiveTurn: () => TelegramPreviewActiveTurn | undefined;
   isAssistantMessage: (message: TMessage) => boolean;
   getMessageText: (message: TMessage) => string;
 }
 
-export type TelegramAssistantPreviewRuntime<TMessage> =
-  TelegramPreviewController & TelegramAssistantMessagePreviewHooks<TMessage>;
+export type TelegramAssistantPreviewRuntime<
+  TMessage,
+  TReplyMarkup = TelegramPreviewReplyMarkup,
+> = TelegramPreviewController<TReplyMarkup> &
+  TelegramAssistantMessagePreviewHooks<TMessage>;
 
-export function createTelegramAssistantPreviewRuntime<TMessage>(
-  deps: TelegramAssistantPreviewRuntimeDeps<TMessage>,
-): TelegramAssistantPreviewRuntime<TMessage> {
+export function createTelegramAssistantPreviewRuntime<
+  TMessage,
+  TReplyMarkup = TelegramPreviewReplyMarkup,
+>(
+  deps: TelegramAssistantPreviewRuntimeDeps<TMessage, TReplyMarkup>,
+): TelegramAssistantPreviewRuntime<TMessage, TReplyMarkup> {
   const controller = createTelegramPreviewControllerRuntime(deps);
   return {
     ...controller,
@@ -331,9 +362,11 @@ export function createTelegramAssistantPreviewRuntime<TMessage>(
   };
 }
 
-export function createTelegramPreviewController(
-  deps: TelegramPreviewControllerDeps,
-): TelegramPreviewController {
+export function createTelegramPreviewController<
+  TReplyMarkup = TelegramPreviewReplyMarkup,
+>(
+  deps: TelegramPreviewControllerDeps<TReplyMarkup>,
+): TelegramPreviewController<TReplyMarkup> {
   let state: TelegramPreviewRuntimeState | undefined;
   const clearTimer = deps.clearTimer ?? clearTimeout;
   const setTimer =
@@ -349,7 +382,7 @@ export function createTelegramPreviewController(
   let nextDraftId = 0;
   const getRuntimeDeps = (
     replyToMessageId?: number,
-  ): TelegramPreviewRuntimeDeps => ({
+  ): TelegramPreviewRuntimeDeps<TReplyMarkup> => ({
     getState: () => state,
     setState: (nextState) => {
       state = nextState;
@@ -387,6 +420,7 @@ export function createTelegramPreviewController(
         options,
       ),
     editRenderedMessage: deps.editRenderedMessage,
+    canSend: deps.canSend,
   });
   return {
     getState: () => state,
@@ -420,8 +454,11 @@ export function createTelegramPreviewController(
   };
 }
 
-export function createTelegramAssistantMessagePreviewHooks<TMessage>(
-  deps: TelegramAssistantMessagePreviewHookDeps<TMessage>,
+export function createTelegramAssistantMessagePreviewHooks<
+  TMessage,
+  TReplyMarkup = TelegramPreviewReplyMarkup,
+>(
+  deps: TelegramAssistantMessagePreviewHookDeps<TMessage, TReplyMarkup>,
 ): TelegramAssistantMessagePreviewHooks<TMessage> {
   return {
     onMessageStart: async (
@@ -437,9 +474,12 @@ export function createTelegramAssistantMessagePreviewHooks<TMessage>(
   };
 }
 
-export async function handleTelegramAssistantMessagePreviewStart<TMessage>(
+export async function handleTelegramAssistantMessagePreviewStart<
+  TMessage,
+  TReplyMarkup = TelegramPreviewReplyMarkup,
+>(
   message: TMessage,
-  deps: TelegramAssistantMessagePreviewStartDeps<TMessage>,
+  deps: TelegramAssistantMessagePreviewStartDeps<TMessage, TReplyMarkup>,
 ): Promise<void> {
   const turn = deps.getActiveTurn();
   if (!turn || !deps.isAssistantMessage(message)) return;
@@ -517,9 +557,11 @@ export function shouldUseTelegramDraftPreview(options: {
   );
 }
 
-export async function clearTelegramPreview(
+export async function clearTelegramPreview<
+  TReplyMarkup = TelegramPreviewReplyMarkup,
+>(
   chatId: number,
-  deps: TelegramPreviewRuntimeDeps,
+  deps: TelegramPreviewRuntimeDeps<TReplyMarkup>,
 ): Promise<void> {
   void chatId;
   const state = deps.getState();
@@ -528,11 +570,17 @@ export async function clearTelegramPreview(
   deps.setState(undefined);
 }
 
-async function performTelegramPreviewFlush(
+async function performTelegramPreviewFlush<
+  TReplyMarkup = TelegramPreviewReplyMarkup,
+>(
   chatId: number,
   state: TelegramPreviewRuntimeState,
-  deps: TelegramPreviewRuntimeDeps,
+  deps: TelegramPreviewRuntimeDeps<TReplyMarkup>,
 ): Promise<void> {
+  if (deps.canSend && !deps.canSend()) {
+    await clearTelegramPreview(chatId, deps);
+    return;
+  }
   const snapshot = buildTelegramPreviewSnapshot({
     state,
     maxMessageLength: deps.maxMessageLength,
@@ -580,9 +628,11 @@ async function performTelegramPreviewFlush(
   state.lastSentStrategy = snapshot.strategy;
 }
 
-export async function flushTelegramPreview(
+export async function flushTelegramPreview<
+  TReplyMarkup = TelegramPreviewReplyMarkup,
+>(
   chatId: number,
-  deps: TelegramPreviewRuntimeDeps,
+  deps: TelegramPreviewRuntimeDeps<TReplyMarkup>,
 ): Promise<void> {
   const state = deps.getState();
   if (!state) return;
@@ -607,12 +657,18 @@ export async function flushTelegramPreview(
   }
 }
 
-export async function finalizeTelegramPreview(
+export async function finalizeTelegramPreview<
+  TReplyMarkup = TelegramPreviewReplyMarkup,
+>(
   chatId: number,
-  deps: TelegramPreviewRuntimeDeps,
+  deps: TelegramPreviewRuntimeDeps<TReplyMarkup>,
 ): Promise<boolean> {
   const state = deps.getState();
   if (!state) return false;
+  if (deps.canSend && !deps.canSend()) {
+    await clearTelegramPreview(chatId, deps);
+    return false;
+  }
   await flushTelegramPreview(chatId, deps);
   const finalText = buildTelegramPreviewFinalText(state);
   if (!finalText) {
@@ -628,14 +684,20 @@ export async function finalizeTelegramPreview(
   return state.messageId !== undefined;
 }
 
-export async function finalizeTelegramMarkdownPreview(
+export async function finalizeTelegramMarkdownPreview<
+  TReplyMarkup = TelegramPreviewReplyMarkup,
+>(
   chatId: number,
   markdown: string,
-  deps: TelegramPreviewRuntimeDeps,
-  options?: { replyMarkup?: TelegramPreviewReplyMarkup },
+  deps: TelegramPreviewRuntimeDeps<TReplyMarkup>,
+  options?: { replyMarkup?: TReplyMarkup },
 ): Promise<boolean> {
   const state = deps.getState();
   if (!state) return false;
+  if (deps.canSend && !deps.canSend()) {
+    await clearTelegramPreview(chatId, deps);
+    return false;
+  }
   await flushTelegramPreview(chatId, deps);
   const chunks = deps.renderTelegramMessage(markdown, { mode: "markdown" });
   if (chunks.length === 0) {

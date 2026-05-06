@@ -1,5 +1,6 @@
 /**
  * Telegram updates domain helpers
+ * Zones: telegram inbound, authorization, routing plans
  * Owns update extraction, authorization, classification, execution planning, and runtime execution for Telegram updates
  */
 
@@ -25,6 +26,24 @@ export type TelegramReactionType =
   | TelegramReactionTypeEmoji
   | TelegramReactionTypeNonEmoji;
 
+export const TELEGRAM_PRIORITY_REACTIONS = [
+  { id: 10, name: "like", emoji: "👍" },
+  { id: 11, name: "lightning", emoji: "⚡" },
+  { id: 12, name: "heart", emoji: "❤" },
+  { id: 13, name: "dove", emoji: "🕊" },
+] as const;
+export const TELEGRAM_REMOVAL_REACTIONS = [
+  { id: 20, name: "dislike", emoji: "👎" },
+  { id: 21, name: "ghost", emoji: "👻" },
+  { id: 22, name: "broken-heart", emoji: "💔" },
+  { id: 23, name: "poop", emoji: "💩" },
+] as const;
+export const TELEGRAM_PRIORITY_REACTION_EMOJIS =
+  TELEGRAM_PRIORITY_REACTIONS.map((reaction) => reaction.emoji);
+export const TELEGRAM_REMOVAL_REACTION_EMOJIS = TELEGRAM_REMOVAL_REACTIONS.map(
+  (reaction) => reaction.emoji,
+);
+
 export interface TelegramUpdateDeletion {
   deleted_business_messages?: { message_ids?: unknown };
 }
@@ -48,6 +67,30 @@ export function collectTelegramReactionEmojis(
       )
       .map((reaction) => normalizeTelegramReactionEmoji(reaction.emoji)),
   );
+}
+
+function hasAnyTelegramReactionEmoji(
+  emojis: Set<string>,
+  candidates: readonly string[],
+): boolean {
+  return candidates.some((emoji) => emojis.has(emoji));
+}
+
+function getAddedTelegramReactionEmoji(
+  oldEmojis: Set<string>,
+  newEmojis: Set<string>,
+  candidates: readonly string[],
+): string | undefined {
+  return candidates.find(
+    (emoji) => !oldEmojis.has(emoji) && newEmojis.has(emoji),
+  );
+}
+function hasAddedTelegramReactionEmoji(
+  oldEmojis: Set<string>,
+  newEmojis: Set<string>,
+  candidates: readonly string[],
+): boolean {
+  return !!getAddedTelegramReactionEmoji(oldEmojis, newEmojis, candidates);
 }
 
 export function extractDeletedTelegramMessageIds(
@@ -379,6 +422,7 @@ export interface TelegramUpdateRuntimeControllerDeps<
   prioritizeQueuedTelegramTurnByMessageId: (
     messageId: number,
     ctx: TContext,
+    priorityEmoji?: string,
   ) => boolean;
   pairTelegramUserIfNeeded: (userId: number, ctx: TContext) => Promise<boolean>;
   answerCallbackQuery: (
@@ -561,6 +605,7 @@ export interface AuthorizedTelegramReactionUpdateDeps<TContext> {
   prioritizeQueuedTelegramTurnByMessageId: (
     messageId: number,
     ctx: TContext,
+    priorityEmoji?: string,
   ) => boolean;
 }
 
@@ -579,8 +624,13 @@ export async function handleAuthorizedTelegramReactionUpdate<TContext>(
   }
   const oldEmojis = collectTelegramReactionEmojis(reactionUpdate.old_reaction);
   const newEmojis = collectTelegramReactionEmojis(reactionUpdate.new_reaction);
-  const dislikeAdded = !oldEmojis.has("👎") && newEmojis.has("👎");
-  if (dislikeAdded) {
+  if (
+    hasAddedTelegramReactionEmoji(
+      oldEmojis,
+      newEmojis,
+      TELEGRAM_REMOVAL_REACTION_EMOJIS,
+    )
+  ) {
     deps.removePendingMediaGroupMessages([reactionUpdate.message_id]);
     deps.removeQueuedTelegramTurnsByMessageIds(
       [reactionUpdate.message_id],
@@ -588,18 +638,30 @@ export async function handleAuthorizedTelegramReactionUpdate<TContext>(
     );
     return;
   }
-  const likeRemoved = oldEmojis.has("👍") && !newEmojis.has("👍");
-  if (likeRemoved) {
+  const hadPriorityReaction = hasAnyTelegramReactionEmoji(
+    oldEmojis,
+    TELEGRAM_PRIORITY_REACTION_EMOJIS,
+  );
+  const hasPriorityReaction = hasAnyTelegramReactionEmoji(
+    newEmojis,
+    TELEGRAM_PRIORITY_REACTION_EMOJIS,
+  );
+  if (hadPriorityReaction && !hasPriorityReaction) {
     deps.clearQueuedTelegramTurnPriorityByMessageId(
       reactionUpdate.message_id,
       deps.ctx,
     );
   }
-  const likeAdded = !oldEmojis.has("👍") && newEmojis.has("👍");
-  if (!likeAdded) return;
+  const addedPriorityEmoji = getAddedTelegramReactionEmoji(
+    oldEmojis,
+    newEmojis,
+    TELEGRAM_PRIORITY_REACTION_EMOJIS,
+  );
+  if (!addedPriorityEmoji) return;
   deps.prioritizeQueuedTelegramTurnByMessageId(
     reactionUpdate.message_id,
     deps.ctx,
+    addedPriorityEmoji,
   );
 }
 

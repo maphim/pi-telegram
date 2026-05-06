@@ -3,8 +3,8 @@
  * Covers extraction, authorization, flow classification, execution planning, and runtime execution in one suite
  */
 
-import test from "node:test";
 import assert from "node:assert/strict";
+import test from "node:test";
 
 import {
   buildTelegramUpdateExecutionPlan,
@@ -17,10 +17,14 @@ import {
   executeTelegramUpdatePlan,
   extractDeletedTelegramMessageIds,
   getAuthorizedTelegramCallbackQuery,
-  handleAuthorizedTelegramReactionUpdate,
   getAuthorizedTelegramEditedMessage,
   getAuthorizedTelegramMessage,
+  handleAuthorizedTelegramReactionUpdate,
   normalizeTelegramReactionEmoji,
+  TELEGRAM_PRIORITY_REACTION_EMOJIS,
+  TELEGRAM_PRIORITY_REACTIONS,
+  TELEGRAM_REMOVAL_REACTION_EMOJIS,
+  TELEGRAM_REMOVAL_REACTIONS,
 } from "../lib/updates.ts";
 
 const TEST_CONTEXT = "ctx";
@@ -33,6 +37,25 @@ test("Update helpers normalize emoji reactions and collect emoji-only entries", 
     { type: "custom_emoji" },
   ]);
   assert.deepEqual([...emojis], ["👍", "👎"]);
+  assert.deepEqual(
+    TELEGRAM_PRIORITY_REACTIONS.map((reaction) => [
+      reaction.id,
+      reaction.name,
+      reaction.emoji,
+    ]),
+    [
+      [10, "like", "👍"],
+      [11, "lightning", "⚡"],
+      [12, "heart", "❤"],
+      [13, "dove", "🕊"],
+    ],
+  );
+  assert.deepEqual(
+    TELEGRAM_REMOVAL_REACTIONS.map((reaction) => reaction.id),
+    [20, 21, 22, 23],
+  );
+  assert.deepEqual(TELEGRAM_PRIORITY_REACTION_EMOJIS, ["👍", "⚡", "❤", "🕊"]);
+  assert.deepEqual(TELEGRAM_REMOVAL_REACTION_EMOJIS, ["👎", "👻", "💔", "💩"]);
 });
 
 test("Update helpers extract deleted business-message ids only from Bot API shapes", () => {
@@ -364,8 +387,12 @@ test("Update runtime handles authorized reaction priority and removal effects", 
       events.push(`clear:${id}`);
       return true;
     },
-    prioritizeQueuedTelegramTurnByMessageId: (id: number) => {
-      events.push(`prioritize:${id}`);
+    prioritizeQueuedTelegramTurnByMessageId: (
+      id: number,
+      _ctx: string,
+      emoji?: string,
+    ) => {
+      events.push(`prioritize:${id}:${emoji}`);
       return true;
     },
   };
@@ -402,18 +429,77 @@ test("Update runtime handles authorized reaction priority and removal effects", 
   await handleAuthorizedTelegramReactionUpdate(
     {
       chat: { type: "private" },
-      user: { id: 8, is_bot: false },
+      user: { id: 7, is_bot: false },
       message_id: 13,
       old_reaction: [],
-      new_reaction: [{ type: "emoji", emoji: "👍" }],
+      new_reaction: [{ type: "emoji", emoji: "⚡" }],
+    },
+    deps,
+  );
+  await handleAuthorizedTelegramReactionUpdate(
+    {
+      chat: { type: "private" },
+      user: { id: 7, is_bot: false },
+      message_id: 14,
+      old_reaction: [],
+      new_reaction: [{ type: "emoji", emoji: "❤️" }],
+    },
+    deps,
+  );
+  await handleAuthorizedTelegramReactionUpdate(
+    {
+      chat: { type: "private" },
+      user: { id: 7, is_bot: false },
+      message_id: 15,
+      old_reaction: [],
+      new_reaction: [{ type: "emoji", emoji: "🕊️" }],
+    },
+    deps,
+  );
+  await handleAuthorizedTelegramReactionUpdate(
+    {
+      chat: { type: "private" },
+      user: { id: 7, is_bot: false },
+      message_id: 16,
+      old_reaction: [],
+      new_reaction: [{ type: "emoji", emoji: "👻" }],
+    },
+    deps,
+  );
+  await handleAuthorizedTelegramReactionUpdate(
+    {
+      chat: { type: "private" },
+      user: { id: 7, is_bot: false },
+      message_id: 17,
+      old_reaction: [],
+      new_reaction: [{ type: "emoji", emoji: "💔" }],
+    },
+    deps,
+  );
+  await handleAuthorizedTelegramReactionUpdate(
+    {
+      chat: { type: "private" },
+      user: { id: 7, is_bot: false },
+      message_id: 18,
+      old_reaction: [],
+      new_reaction: [{ type: "emoji", emoji: "💩" }],
     },
     deps,
   );
   assert.deepEqual(events, [
-    "prioritize:10",
+    "prioritize:10:👍",
     "clear:11",
     "media:12",
     "remove:12",
+    "prioritize:13:⚡",
+    "prioritize:14:❤",
+    "prioritize:15:🕊",
+    "media:16",
+    "remove:16",
+    "media:17",
+    "remove:17",
+    "media:18",
+    "remove:18",
   ]);
 });
 

@@ -135,10 +135,7 @@ test("Model helpers match models, detect thinking levels, and expose constants",
     "xhigh",
   ]);
   assert.equal(
-    modelsMatch(
-      createModelTestModel(),
-      createModelTestModel(),
-    ),
+    modelsMatch(createModelTestModel(), createModelTestModel()),
     true,
   );
   assert.equal(
@@ -148,10 +145,7 @@ test("Model helpers match models, detect thinking levels, and expose constants",
     ),
     false,
   );
-  assert.equal(
-    getCanonicalModelId(createModelTestModel()),
-    "openai/gpt-5",
-  );
+  assert.equal(getCanonicalModelId(createModelTestModel()), "openai/gpt-5");
   assert.equal(isThinkingLevel("high"), true);
   assert.equal(isThinkingLevel("impossible"), false);
 });
@@ -183,7 +177,9 @@ test("Model helpers resolve scoped model patterns and sort current models first"
   const models: MenuModel[] = [
     createModelTestModel("openai", "gpt-5", { name: "GPT 5" }),
     createModelTestModel("openai", "gpt-5-latest", { name: "GPT 5 Latest" }),
-    createModelTestModel("anthropic", "claude-sonnet-20250101", { name: "Claude Sonnet" }),
+    createModelTestModel("anthropic", "claude-sonnet-20250101", {
+      name: "Claude Sonnet",
+    }),
   ];
   const resolved = resolveScopedModelPatterns(
     ["gpt-5:high", "anthropic/*:low"],
@@ -342,10 +338,7 @@ test("Model-switch controller centralizes pending abort and continuation queuein
     },
   });
   assert.equal(controller.canOfferInFlightSwitch({}), true);
-  controller.stagePendingSwitch(
-    createModelTestSelection(),
-    {},
-  );
+  controller.stagePendingSwitch(createModelTestSelection(), {});
   assert.deepEqual(events, ["status"]);
   assert.equal(controller.triggerPendingAbort({}), true);
   assert.deepEqual(events, ["status", "queue:2:gpt-5", "abort"]);
@@ -468,11 +461,9 @@ test("Model-switch continuation queue creates and appends continuation turns", (
       appended.push({ item, ctx });
     },
   });
-  queueContinuation(
-    createModelTestTurn(),
-    createModelTestSelection(),
-    { id: "ctx" },
-  );
+  queueContinuation(createModelTestTurn(), createModelTestSelection(), {
+    id: "ctx",
+  });
   assert.equal(appended[0]?.item.content[0]?.type, "text");
   assert.equal(appended[0]?.item.content[0]?.text, "gpt-5");
   assert.deepEqual(appended[0]?.ctx, { id: "ctx" });

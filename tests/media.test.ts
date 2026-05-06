@@ -279,8 +279,7 @@ test("Media group dispatch runtime handles immediate and grouped messages", asyn
       message_id: number;
       chat: { id: number };
       media_group_id?: string;
-    },
-    string
+    }
   >({
     setTimer: (callback) => {
       callbacks.push(callback);

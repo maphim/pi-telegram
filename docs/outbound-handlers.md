@@ -2,20 +2,55 @@
 
 `pi-telegram` maps hidden assistant-authored HTML comments to Telegram-native outbound actions.
 
-This is intentionally prompt-driven: the agent writes normal Markdown plus small hidden top-level blocks, and the bridge performs the transport work after `agent_end`. `telegram_voice` and `telegram_button` are not pi tools. Outbound behavior is an emergent result of the assistant prompt, configured command-template handlers, generated artifacts, and reply delivery. That avoids extra agent-side tool calls, avoids fragile parameter plumbing inside the conversation, and minimizes latency because text, voice, and buttons are planned in one standard assistant reply.
+This is intentionally prompt-driven: the agent writes normal Markdown plus small hidden top-level blocks, and the bridge performs the transport work after `agent_end`. `telegram_voice` and `telegram_button` are not π tools. Outbound behavior is an emergent result of the assistant prompt, configured command-template handlers, generated artifacts, and reply delivery. That avoids extra agent-side tool calls, avoids fragile parameter plumbing inside the conversation, and minimizes latency because text, voice, and buttons are planned in one standard assistant reply.
 
 This document is the local outbound adaptation of the portable [Command Template Standard](./command-templates.md).
 
 ## Standard
 
-An outbound handler is selected by `type`. Assistant markup maps to handler types:
+An outbound handler is selected by `type`. Text replies and assistant markup map to handler types:
 
-| Markup            | Handler type | Telegram action                                    |
+| Source            | Handler type | Telegram action                                    |
 | ----------------- | ------------ | -------------------------------------------------- |
+| Final text reply  | `text`       | Transform text/Markdown before Telegram rendering  |
 | `telegram_voice`  | `voice`      | Generate OGG/Opus and call `sendVoice`             |
 | `telegram_button` | Built-in     | Attach an inline keyboard button to the final text |
 
-Configured command-template handlers provide `template`. A string is one command; an array is ordered composition. Top-level `args`, `defaults`, and `timeout` apply to all composed steps unless a step defines private values. `output` selects the primary artifact path when the handler produces a file instead of stdout text. Legacy configs may still use `pipe`, but `template: [...]` is the preferred standard shape.
+Configured command-template handlers provide `template`. A string is one command; an array is ordered composition. Top-level `args` and `defaults` apply to all composed steps unless a step defines private values. The command-template default timeout applies automatically. `output` selects the primary artifact path when the handler produces a file instead of stdout text. Legacy configs may still use `pipe`, but `template: [...]` is the preferred standard shape.
+
+## Text Handler Config
+
+`type: "text"` handlers transform final text replies before rendering and delivery. The source text is provided on stdin and as `{text}`. Successful non-empty stdout replaces the current text. Empty stdout or handler failure keeps the previous text and records diagnostics.
+
+This is ideal for machine translation, tone normalization, redaction, glossary expansion, compliance footers, or any other final text rewrite that should be configured outside the agent prompt. Text handlers run before Markdown/HTML rendering, so a Markdown reply remains Markdown input to the handler. They also run when the bridge finalizes an already streamed rich preview; in that path Telegram can briefly show a pre-transform preview before the final edited message is replaced with the handler output. Inline buttons are built as reply markup: visible button labels pass through the same text handler, while callback data and callback prompts remain unchanged.
+
+Simple machine-translation handler with explicit text placeholder:
+
+```json
+{
+  "outboundHandlers": [
+    {
+      "type": "text",
+      "template": "/path/to/translate --lang {lang=ru} --text \"{text}\""
+    }
+  ]
+}
+```
+
+Stdin-based or subagent-backed translation can omit `{text}` from the template because the bridge also provides the source reply on stdin:
+
+```json
+{
+  "outboundHandlers": [
+    {
+      "type": "text",
+      "template": "/path/to/translate-stdin --lang {lang=ru}"
+    }
+  ]
+}
+```
+
+A text handler should preserve the full message unless shortening is intentional; for translation prompts, explicitly ask the tool to keep Markdown, line breaks, and details unchanged.
 
 ## Voice Handler Config
 
@@ -27,17 +62,17 @@ Configured command-template handlers provide `template`. A string is one command
     {
       "type": "voice",
       "template": [
-        "/path/to/tts --text {text} --lang {lang=ru} --rate {rate=+30%} --write-media {mp3}",
+        "/path/to/translate-stdin --lang {lang=ru}",
+        "/path/to/tts-from-stdin --lang {lang=ru} --rate {rate=+30%} --write-media {mp3}",
         "ffmpeg -y -i {mp3} -c:a libopus -b:a 32k -ar 16000 -ac 1 -vbr on {ogg}"
       ],
-      "output": "ogg",
-      "timeout": 120000
+      "output": "ogg"
     }
   ]
 }
 ```
 
-If a matching voice handler fails, the bridge tries the next matching `type: "voice"` handler.
+In this example, the first step receives the `telegram_voice` text on stdin and returns translated text; the second step reads that translated text from stdin and writes `{mp3}`; the final step converts `{mp3}` to Telegram-ready `{ogg}`. If you do not need voice translation, omit the first step and call a TTS command that accepts `{text}` directly. If a matching voice handler fails, the bridge tries the next matching `type: "voice"` handler.
 
 ## Voice Markup
 
@@ -77,9 +112,11 @@ For composed handlers, `output` selects the primary artifact after the compositi
 
 For one-step `template` handlers, stdout remains the default result channel: the command should print the generated OGG/Opus path.
 
+**Critical steps:** voice synthesis is often a multi-step transform → TTS → conversion pipeline. The final audio conversion step is inherently critical — if it fails, the voice output is invalid. Mark conversion steps as `"critical": true` when a composed handler must abort after conversion failure instead of continuing to later non-critical steps. Use multiple matching `type: "voice"` handlers when you need provider or command fallbacks. See [Command Template Standard](./command-templates.md) for semantics.
+
 ## Buttons Markup
 
-Assistant replies can include independent button blocks. The prompt is sent back to pi when the user taps the button; use the colon shorthand when the prompt should equal the label, `prompt="..."` for one-line prompts, or the body form for multiline prompts:
+Assistant replies can include independent button blocks. The prompt is sent back to π when the user taps the button; use the colon shorthand when the prompt should equal the label, `prompt="..."` for one-line prompts, or the body form for multiline prompts:
 
 ```md
 I can continue.

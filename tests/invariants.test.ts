@@ -155,6 +155,15 @@ test("Project TypeScript files start with responsibility headers", () => {
   assert.deepEqual(filesWithoutHeaders, []);
 });
 
+test("Project source module headers include Domain DAG zone tags", () => {
+  const sourceFilesWithoutZoneTags = getProjectSourceFiles().filter((file) => {
+    const source = readFileSync(join(PROJECT_ROOT, file), "utf8");
+    const header = source.match(/^\/\*\*[\s\S]*?\*\//)?.[0] ?? "";
+    return !/^ \* Zones: .+/m.test(header);
+  });
+  assert.deepEqual(sourceFilesWithoutZoneTags, []);
+});
+
 test("Project source avoids empty interface-extension shells", () => {
   const emptyInterfacePattern =
     /export\s+interface\s+\w+(?:<[^>{}]+>)?\s+extends[^{]+\{\s*\}/g;
@@ -253,8 +262,8 @@ test("Structural update and media domains stay decoupled from concrete API trans
   });
 });
 
-test("Attachment delivery stays decoupled from queue, inbound media, and API helpers", () => {
-  const attachmentImports = getImportSpecifiers(join("lib", "attachments.ts"));
+test("Outbound attachment delivery stays decoupled from queue, inbound media, and API helpers", () => {
+  const attachmentImports = getImportSpecifiers(join("lib", "outbound-attachments.ts"));
   assert.equal(attachmentImports.includes("./queue.ts"), false);
   assert.equal(attachmentImports.includes("./media.ts"), false);
   assert.equal(attachmentImports.includes("./api.ts"), false);

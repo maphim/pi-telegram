@@ -6,10 +6,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { resetTransportReplyDedup } from "../lib/replies.ts";
+
+test.beforeEach(() => resetTransportReplyDedup());
+
 import {
   createTelegramButtonActionStore,
   createTelegramButtonPromptTurn,
   createTelegramOutboundReplyArtifactSender,
+  createTelegramOutboundTextPreviewRuntime,
+  createTelegramOutboundTextReplyRuntime,
   createTelegramVoiceReplySender,
   generateTelegramVoiceReplyFile,
   handleTelegramButtonCallbackQuery,
@@ -22,6 +28,175 @@ import {
 const testReplyMarkup = {
   inline_keyboard: [[{ text: "Continue", callback_data: "btn:1" }]],
 };
+
+test("Outbound text handler transforms text and markdown replies", async () => {
+  const sent: string[] = [];
+  const markdownOptions: unknown[] = [];
+  const calls: Array<{ command: string; stdin?: string }> = [];
+  const runtime = createTelegramOutboundTextReplyRuntime({
+    getHandlers: () => [{ type: "text", template: "/tools/translate" }],
+    execCommand: async (command, _args, options) => {
+      calls.push({ command, stdin: options?.stdin });
+      return {
+        stdout: `translated:${options?.stdin ?? ""}`,
+        stderr: "",
+        code: 0,
+        killed: false,
+      };
+    },
+    sendTextReply: async (_chatId, _replyToMessageId, text) => {
+      sent.push(`text:${text}`);
+      return 1;
+    },
+    sendMarkdownReply: async (
+      _chatId,
+      _replyToMessageId,
+      markdown,
+      options,
+    ) => {
+      sent.push(`markdown:${markdown}`);
+      markdownOptions.push(options);
+      return 2;
+    },
+  });
+  assert.equal(await runtime.sendTextReply(1, 2, "hello"), 1);
+  assert.equal(
+    await runtime.sendMarkdownReply(1, 2, "**hello**", {
+      replyMarkup: testReplyMarkup,
+    }),
+    2,
+  );
+  assert.deepEqual(calls, [
+    { command: "/tools/translate", stdin: "hello" },
+    { command: "/tools/translate", stdin: "**hello**" },
+    { command: "/tools/translate", stdin: "Continue" },
+  ]);
+  assert.deepEqual(sent, [
+    "text:translated:hello",
+    "markdown:translated:**hello**",
+  ]);
+  assert.deepEqual(markdownOptions, [
+    {
+      replyMarkup: {
+        inline_keyboard: [
+          [{ text: "translated:Continue", callback_data: "btn:1" }],
+        ],
+      },
+    },
+  ]);
+});
+
+test("Outbound text handler preserves inline buttons on transformed replies", async () => {
+  const sent: Array<{ markdown: string; replyMarkup: unknown }> = [];
+  const actions: unknown[] = [];
+  const plan = planTelegramButtonReply(
+    ["Answer.", "", "<!-- telegram_button: Continue -->"].join("\n"),
+    {
+      registerAction: (action) => {
+        actions.push(action);
+        return `btn:${actions.length}`;
+      },
+    },
+  );
+  const runtime = createTelegramOutboundTextReplyRuntime({
+    getHandlers: () => [{ type: "text", template: "/tools/translate" }],
+    execCommand: async (_command, _args, options) => ({
+      stdout: `translated:${options?.stdin ?? ""}`,
+      stderr: "",
+      code: 0,
+      killed: false,
+    }),
+    sendTextReply: async () => 1,
+    sendMarkdownReply: async (
+      _chatId,
+      _replyToMessageId,
+      markdown,
+      options,
+    ) => {
+      sent.push({ markdown, replyMarkup: options?.replyMarkup });
+      return 2;
+    },
+  });
+  await runtime.sendMarkdownReply(1, 2, plan.markdown, {
+    replyMarkup: plan.replyMarkup,
+  });
+  assert.deepEqual(actions, [{ text: "Continue", prompt: "Continue" }]);
+  assert.deepEqual(sent, [
+    {
+      markdown: "translated:Answer.",
+      replyMarkup: {
+        inline_keyboard: [
+          [{ text: "translated:Continue", callback_data: "btn:1" }],
+        ],
+      },
+    },
+  ]);
+});
+
+test("Outbound text handler transforms finalized markdown previews", async () => {
+  const finalized: string[] = [];
+  const previewOptions: unknown[] = [];
+  const runtime = createTelegramOutboundTextPreviewRuntime({
+    getHandlers: () => [{ type: "text", template: "/tools/translate" }],
+    execCommand: async (_command, _args, options) => ({
+      stdout: `translated:${options?.stdin ?? ""}`,
+      stderr: "",
+      code: 0,
+      killed: false,
+    }),
+    finalizeMarkdownPreview: async (
+      _chatId,
+      markdown,
+      _replyToMessageId,
+      options,
+    ) => {
+      finalized.push(markdown);
+      previewOptions.push(options);
+      return true;
+    },
+  });
+  assert.equal(
+    await runtime.finalizeMarkdownPreview(1, "**hello**", 2, {
+      replyMarkup: testReplyMarkup,
+    }),
+    true,
+  );
+  assert.deepEqual(finalized, ["translated:**hello**"]);
+  assert.deepEqual(previewOptions, [
+    {
+      replyMarkup: {
+        inline_keyboard: [
+          [{ text: "translated:Continue", callback_data: "btn:1" }],
+        ],
+      },
+    },
+  ]);
+});
+
+test("Outbound text handler keeps original reply on failure", async () => {
+  const events: string[] = [];
+  const sent: string[] = [];
+  const runtime = createTelegramOutboundTextReplyRuntime({
+    getHandlers: () => [{ type: "text", template: "/tools/fail" }],
+    execCommand: async () => ({
+      stdout: "",
+      stderr: "boom",
+      code: 1,
+      killed: false,
+    }),
+    sendTextReply: async (_chatId, _replyToMessageId, text) => {
+      sent.push(text);
+      return 1;
+    },
+    sendMarkdownReply: async () => 2,
+    recordRuntimeEvent: (category) => {
+      events.push(category);
+    },
+  });
+  assert.equal(await runtime.sendTextReply(1, 2, "original"), 1);
+  assert.deepEqual(sent, ["original"]);
+  assert.deepEqual(events, ["outbound-text-handler"]);
+});
 
 test("Voice reply planner extracts multiline telegram_voice comments", () => {
   const plan = planTelegramVoiceReply(
@@ -62,7 +237,9 @@ test("Voice reply planner supports text attribute comments", () => {
   assert.deepEqual(plan, {
     markdown: "Text before.",
     voiceText: "Inline spoken summary.",
-    voiceReplies: [{ text: "Inline spoken summary.", lang: "ru", rate: "+10%" }],
+    voiceReplies: [
+      { text: "Inline spoken summary.", lang: "ru", rate: "+10%" },
+    ],
     lang: "ru",
     rate: "+10%",
   });
@@ -657,7 +834,7 @@ test("Voice reply generator runs configured TTS to OGG pipe", async () => {
   assert.match(path, /[0-9a-f-]+-voice\.ogg$/);
 });
 
-test("Voice reply generator pipes stdout to stdin and defaults composition output to stdout", async () => {
+test("Voice reply generator pipes initial text and stdout to stdin", async () => {
   const calls: Array<{
     command: string;
     args: string[];
@@ -696,7 +873,7 @@ test("Voice reply generator pipes stdout to stdin and defaults composition outpu
     {
       command: "/bin/prepare",
       args: ["hello"],
-      stdin: undefined,
+      stdin: "hello",
       timeout: 111000,
     },
     {
@@ -844,4 +1021,108 @@ test("Voice reply sender uploads generated ogg via sendVoice", async () => {
       fileName: "voice.ogg",
     },
   ]);
+});
+
+// --- Critical-step composition tests ---
+
+test("Voice reply composition: non-critical failure continues to next step", async () => {
+  const calls: string[] = [];
+  const path = await generateTelegramVoiceReplyFile("hello", {
+    handler: {
+      type: "voice",
+      template: ["preprocess {text}", "synthesize {text}"],
+    },
+    execCommand: async (command) => {
+      calls.push(command);
+      if (command === "preprocess")
+        return { stdout: "", stderr: "skip", code: 1, killed: false };
+      return { stdout: "/tmp/out.ogg\n", stderr: "", code: 0, killed: false };
+    },
+  });
+  assert.equal(path, "/tmp/out.ogg");
+  assert.deepEqual(calls, ["preprocess", "synthesize"]);
+});
+
+test("Voice reply composition: critical failure aborts composition", async () => {
+  const calls: string[] = [];
+  let caught: Error | undefined;
+  try {
+    await generateTelegramVoiceReplyFile("hello", {
+      handler: {
+        type: "voice",
+        template: [
+          { template: "preprocess {text}", critical: true },
+          "synthesize {text}",
+          "finalize {text}",
+        ],
+      },
+      execCommand: async (command) => {
+        calls.push(command);
+        if (command === "preprocess")
+          return { stdout: "", stderr: "fatal", code: 1, killed: false };
+        return { stdout: "/tmp/ok.ogg\n", stderr: "", code: 0, killed: false };
+      },
+    });
+  } catch (e) {
+    caught = e as Error;
+  }
+  assert.ok(caught);
+  assert.ok(caught.message.includes("code 1"));
+  assert.deepEqual(calls, ["preprocess"]);
+});
+
+// --- Combined profile: CI-like pipeline (composition + retry + critical) ---
+
+test("Voice reply composition: full CI-like pipeline with retry and critical", async () => {
+  let testCalls = 0;
+  const execOnce = async () => {
+    testCalls++;
+    return { stdout: "", stderr: "flake", code: 1, killed: false };
+  };
+  let caught: Error | undefined;
+  try {
+    await generateTelegramVoiceReplyFile("ship", {
+      handler: {
+        type: "voice",
+        template: [
+          { template: "build", critical: true },
+          "lint",
+          { template: "test --suite {text}", critical: true, retry: 2 },
+          { template: "deploy", critical: true },
+        ],
+      },
+      execCommand: async (command, _args, options) => {
+        if (command === "build")
+          return { stdout: "built\n", stderr: "", code: 0, killed: false };
+        if (command === "lint")
+          return { stdout: "", stderr: "warnings", code: 1, killed: false };
+        if (command === "test") {
+          const max = options?.retry ?? 1;
+          for (let i = 0; i < max; i++) {
+            const result = await execOnce();
+            if (result.code === 0) return result;
+          }
+          return {
+            stdout: "",
+            stderr: "all retries exhausted",
+            code: 1,
+            killed: false,
+          };
+        }
+        return {
+          stdout: "/tmp/shipped.ogg\n",
+          stderr: "",
+          code: 0,
+          killed: false,
+        };
+      },
+    });
+  } catch (e) {
+    caught = e as Error;
+  }
+  // build (critical, succeeds) → lint (non-critical, fails, continues) →
+  // test (critical, retry=2, both fail → abort) → deploy unreached
+  assert.ok(caught);
+  assert.ok(caught.message.includes("Outbound voice template step"));
+  assert.equal(testCalls, 2);
 });

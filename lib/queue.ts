@@ -1,6 +1,7 @@
 /**
- * Telegram queue and queue-runtime domain helpers
- * Owns queue items, queue mutations, dispatch and lifecycle planning, session resets, and queue-adjacent runtime helpers
+ * Telegram queue core contracts and pure planning helpers
+ * Zones: telegram queue, pi agent lifecycle, scheduling
+ * Owns queue item contracts, lane admission, pure queue mutations, and dispatch planning
  */
 
 // --- Queue Items ---
@@ -77,6 +78,7 @@ export interface PendingTelegramTurn extends TelegramQueueItemBase {
   queuedAttachments: QueuedAttachment[];
   content: TelegramPromptContent[];
   historyText: string;
+  priorityEmoji?: string;
 }
 
 export interface PendingTelegramControlItem<
@@ -175,6 +177,14 @@ export function createTelegramQueueStore<TContext = unknown>(
       queuedItems = items;
     },
     hasQueuedItems: () => queuedItems.length > 0,
+  };
+}
+
+export function createTelegramQueueItemCountGetter<TContext = unknown>(
+  store: Pick<TelegramQueueStore<TContext>, "getQueuedItems">,
+): () => number {
+  return function getTelegramQueueItemCount() {
+    return store.getQueuedItems().length;
   };
 }
 
@@ -295,6 +305,7 @@ export function clearTelegramQueuePromptPriority<TContext = unknown>(
       ...item,
       queueLane: "default" as const,
       laneOrder: item.queueOrder,
+      priorityEmoji: undefined,
     };
   });
   return { items: nextItems, changed };
@@ -304,6 +315,7 @@ export function prioritizeTelegramQueuePrompt<TContext = unknown>(
   items: TelegramQueueItem<TContext>[],
   messageId: number,
   laneOrder: number,
+  priorityEmoji = "⚡",
 ): { items: TelegramQueueItem<TContext>[]; changed: boolean } {
   let changed = false;
   const nextItems = items.map((item) => {
@@ -318,6 +330,7 @@ export function prioritizeTelegramQueuePrompt<TContext = unknown>(
       ...item,
       queueLane: "priority" as const,
       laneOrder,
+      priorityEmoji,
     };
   });
   return { items: nextItems, changed };
@@ -344,7 +357,7 @@ function formatTelegramQueueItemStatusSummary<TContext = unknown>(
   item: TelegramQueueItem<TContext>,
 ): string {
   if (item.queueLane === "priority") {
-    return `⬆ ${item.statusSummary}`;
+    return `${item.kind === "prompt" ? item.priorityEmoji ?? "⚡" : "⚡"} ${item.statusSummary}`;
   }
   return item.statusSummary;
 }
@@ -665,18 +678,32 @@ export type TelegramAgentLifecycleHooksRuntimeDeps<
   TTurn extends PendingTelegramTurn,
   TContext,
   TMessage,
+  TReplyMarkup = unknown,
 > = TelegramAgentStartHookRuntimeDeps<TTurn, TContext> &
-  TelegramAgentEndHookRuntimeDeps<TTurn, TContext, TMessage> &
+  TelegramAgentEndHookRuntimeDeps<TTurn, TContext, TMessage, TReplyMarkup> &
   TelegramToolExecutionHookRuntimeDeps<TContext>;
 
 export function createTelegramAgentLifecycleHooks<
   TTurn extends PendingTelegramTurn,
   TContext,
   TMessage,
->(deps: TelegramAgentLifecycleHooksRuntimeDeps<TTurn, TContext, TMessage>) {
+  TReplyMarkup = unknown,
+>(
+  deps: TelegramAgentLifecycleHooksRuntimeDeps<
+    TTurn,
+    TContext,
+    TMessage,
+    TReplyMarkup
+  >,
+) {
   return {
     onAgentStart: createTelegramAgentStartHook<TTurn, TContext>(deps),
-    onAgentEnd: createTelegramAgentEndHook<TTurn, TContext, TMessage>(deps),
+    onAgentEnd: createTelegramAgentEndHook<
+      TTurn,
+      TContext,
+      TMessage,
+      TReplyMarkup
+    >(deps),
     ...createTelegramToolExecutionHooks<TContext>(deps),
   };
 }
@@ -737,12 +764,14 @@ export interface TelegramAgentEndOutboundReplyPlan<TReplyMarkup = unknown> {
 
 export interface TelegramAgentEndRuntimeDeps<
   TTurn extends PendingTelegramTurn,
+  TReplyMarkup = unknown,
 > {
   turn: TTurn | undefined;
   assistant: TelegramAgentEndAssistantResult;
   preserveQueuedTurnsAsHistory: boolean;
   resetRuntimeState: () => void;
   updateStatus: () => void;
+  isCurrentOwner?: () => boolean;
   dispatchNextQueuedTelegramTurn: () => void;
   clearPreview: (chatId: number) => Promise<void>;
   setPreviewPendingText: (text: string) => void;
@@ -750,13 +779,13 @@ export interface TelegramAgentEndRuntimeDeps<
     chatId: number,
     markdown: string,
     replyToMessageId: number,
-    options?: { replyMarkup?: unknown },
+    options?: { replyMarkup?: TReplyMarkup },
   ) => Promise<boolean>;
   sendMarkdownReply: (
     chatId: number,
     replyToMessageId: number,
     markdown: string,
-    options?: { replyMarkup?: unknown },
+    options?: { replyMarkup?: TReplyMarkup },
   ) => Promise<unknown>;
   sendTextReply: (
     chatId: number,
@@ -764,7 +793,9 @@ export interface TelegramAgentEndRuntimeDeps<
     text: string,
   ) => Promise<unknown>;
   sendQueuedAttachments: (turn: TTurn) => Promise<void>;
-  planOutboundReply?: (markdown: string) => TelegramAgentEndOutboundReplyPlan;
+  planOutboundReply?: (
+    markdown: string,
+  ) => TelegramAgentEndOutboundReplyPlan<TReplyMarkup>;
   sendOutboundReplyArtifacts?: (
     turn: TTurn,
     plan: TelegramAgentEndOutboundReplyPlan,
@@ -776,6 +807,7 @@ export interface TelegramAgentEndHookRuntimeDeps<
   TTurn extends PendingTelegramTurn,
   TContext,
   TMessage,
+  TReplyMarkup = unknown,
 > {
   getActiveTurn: () => TTurn | undefined;
   extractAssistant: (
@@ -784,17 +816,27 @@ export interface TelegramAgentEndHookRuntimeDeps<
   getPreserveQueuedTurnsAsHistory: () => boolean;
   resetRuntimeState: () => void;
   updateStatus: (ctx: TContext) => void;
+  isCurrentOwner?: (ctx: TContext) => boolean;
   dispatchNextQueuedTelegramTurn: (ctx: TContext) => void;
   requestDeferredDispatchNextQueuedTelegramTurn: (
     dispatch: (ctx: TContext) => void,
   ) => void;
   clearPreview: (chatId: number) => Promise<void>;
   setPreviewPendingText: (text: string) => void;
-  finalizeMarkdownPreview: TelegramAgentEndRuntimeDeps<TTurn>["finalizeMarkdownPreview"];
-  sendMarkdownReply: TelegramAgentEndRuntimeDeps<TTurn>["sendMarkdownReply"];
+  finalizeMarkdownPreview: TelegramAgentEndRuntimeDeps<
+    TTurn,
+    TReplyMarkup
+  >["finalizeMarkdownPreview"];
+  sendMarkdownReply: TelegramAgentEndRuntimeDeps<
+    TTurn,
+    TReplyMarkup
+  >["sendMarkdownReply"];
   sendTextReply: TelegramAgentEndRuntimeDeps<TTurn>["sendTextReply"];
   sendQueuedAttachments: (turn: TTurn) => Promise<void>;
-  planOutboundReply?: TelegramAgentEndRuntimeDeps<TTurn>["planOutboundReply"];
+  planOutboundReply?: TelegramAgentEndRuntimeDeps<
+    TTurn,
+    TReplyMarkup
+  >["planOutboundReply"];
   sendOutboundReplyArtifacts?: TelegramAgentEndRuntimeDeps<TTurn>["sendOutboundReplyArtifacts"];
 }
 
@@ -872,7 +914,15 @@ export function createTelegramAgentEndHook<
   TTurn extends PendingTelegramTurn,
   TContext,
   TMessage,
->(deps: TelegramAgentEndHookRuntimeDeps<TTurn, TContext, TMessage>) {
+  TReplyMarkup = unknown,
+>(
+  deps: TelegramAgentEndHookRuntimeDeps<
+    TTurn,
+    TContext,
+    TMessage,
+    TReplyMarkup
+  >,
+) {
   return async function onAgentEnd(
     event: TelegramAgentEndHookEvent<TMessage>,
     ctx: TContext,
@@ -884,6 +934,9 @@ export function createTelegramAgentEndHook<
       preserveQueuedTurnsAsHistory: deps.getPreserveQueuedTurnsAsHistory(),
       resetRuntimeState: deps.resetRuntimeState,
       updateStatus: () => deps.updateStatus(ctx),
+      isCurrentOwner: deps.isCurrentOwner
+        ? () => deps.isCurrentOwner?.(ctx) ?? false
+        : undefined,
       dispatchNextQueuedTelegramTurn: () => {
         deps.requestDeferredDispatchNextQueuedTelegramTurn(
           deps.dispatchNextQueuedTelegramTurn,
@@ -903,7 +956,8 @@ export function createTelegramAgentEndHook<
 
 export async function handleTelegramAgentEndRuntime<
   TTurn extends PendingTelegramTurn,
->(deps: TelegramAgentEndRuntimeDeps<TTurn>): Promise<void> {
+  TReplyMarkup = unknown,
+>(deps: TelegramAgentEndRuntimeDeps<TTurn, TReplyMarkup>): Promise<void> {
   const { turn, assistant } = deps;
   const rawFinalText = assistant.text;
   const outboundReply = rawFinalText
@@ -915,6 +969,10 @@ export async function handleTelegramAgentEndRuntime<
   const replyMarkup = outboundReply?.replyMarkup;
   deps.resetRuntimeState();
   deps.updateStatus();
+  if (turn && deps.isCurrentOwner && !deps.isCurrentOwner()) {
+    await deps.clearPreview(turn.chatId);
+    return;
+  }
   const endPlan = buildTelegramAgentEndPlan({
     hasTurn: !!turn,
     stopReason: assistant.stopReason,
@@ -934,7 +992,7 @@ export async function handleTelegramAgentEndRuntime<
       turn.chatId,
       turn.replyToMessageId,
       assistant.errorMessage ||
-        "Telegram bridge: pi failed while processing the request.",
+        "Telegram bridge: π failed while processing the request.",
     );
     if (endPlan.shouldDispatchNext) deps.dispatchNextQueuedTelegramTurn();
     return;
@@ -1116,7 +1174,11 @@ export interface TelegramQueueMutationController<TContext> {
   clear: (ctx: TContext) => number;
   removeByMessageIds: (messageIds: number[], ctx: TContext) => number;
   clearPriorityByMessageId: (messageId: number, ctx: TContext) => boolean;
-  prioritizeByMessageId: (messageId: number, ctx: TContext) => boolean;
+  prioritizeByMessageId: (
+    messageId: number,
+    ctx: TContext,
+    priorityEmoji?: string,
+  ) => boolean;
 }
 
 export interface TelegramControlQueueControllerDeps<TContext> {
@@ -1330,8 +1392,12 @@ export function createTelegramQueueMutationController<TContext>(
       ),
     clearPriorityByMessageId: (messageId, ctx) =>
       clearTelegramQueuePromptPriorityRuntime(messageId, buildRuntimeDeps(ctx)),
-    prioritizeByMessageId: (messageId, ctx) =>
-      prioritizeTelegramQueuePromptRuntime(messageId, buildRuntimeDeps(ctx)),
+    prioritizeByMessageId: (messageId, ctx, priorityEmoji) =>
+      prioritizeTelegramQueuePromptRuntime(
+        messageId,
+        buildRuntimeDeps(ctx),
+        priorityEmoji,
+      ),
   };
 }
 
@@ -1393,6 +1459,7 @@ export function clearTelegramQueuePromptPriorityRuntime<TContext>(
 export function prioritizeTelegramQueuePromptRuntime<TContext>(
   messageId: number,
   deps: TelegramQueueMutationRuntimeDeps<TContext>,
+  priorityEmoji?: string,
 ): boolean {
   const nextPriorityReactionOrder = deps.getNextPriorityReactionOrder?.();
   if (nextPriorityReactionOrder === undefined) return false;
@@ -1400,6 +1467,7 @@ export function prioritizeTelegramQueuePromptRuntime<TContext>(
     deps.getQueuedItems(),
     messageId,
     nextPriorityReactionOrder,
+    priorityEmoji,
   );
   if (!changed) return false;
   deps.setQueuedItems(items);

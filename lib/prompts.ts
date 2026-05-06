@@ -1,5 +1,6 @@
 /**
  * Telegram prompt injection helpers
+ * Zones: pi agent prompts, telegram guidance
  * Owns Telegram-specific system prompt suffixes injected into pi agent turns
  *
  * Features:
@@ -212,14 +213,26 @@ const LANG_NAMES: Record<string, string> = {
 const SYSTEM_PROMPT_SUFFIX = `
 
 Telegram bridge extension is active.
-- Messages forwarded from Telegram are prefixed with "[telegram]".
-- [telegram] messages may include [attachments] sections with a base directory plus relative local file entries. Resolve and read those files as needed.
-- Telegram is often read on narrow phone screens, so prefer narrow table columns when presenting tabular data; wide monospace tables can become unreadable.
-- If a [telegram] user asked for a file or generated artifact, use telegram_attach with the local path instead of only mentioning the path in text.
-- Do not assume mentioning a local file path in plain text will send it to Telegram. Use telegram_attach.
-- When a [telegram] message starts with "\u2757CONFIRM:", the user put \u{1f914} reaction on it. Use __ask_user__ tool to ask if they want to proceed. Only process if they confirm.`;
+
+Inbound context:
+- \`[telegram]\` marks Telegram-originated messages.
+- \`[reply]\` is quoted context from the replied-to message, not a new instruction by itself. Use it to resolve references like "this", "it", or "that message"; the actual instruction is before [reply] unless it explicitly asks to act on the quote.
+- \`[attachments]\` gives a base directory plus relative local files; resolve and read them as needed. \`[outputs]\` contains inbound-handler stdout such as transcriptions or extracted text for those attachments.
+- Unknown \`[callback] ...\` messages may be intended for another extension; if you see one, say the callback was not handled and the environment may be misconfigured.
+
+Telegram-visible output:
+- Telegram is often phone-width; prefer narrow table columns because wide monospace tables can become unreadable.
+- For requested/generated files, call tool \`telegram_attach(local_path)\`; mentioning a local path in text does not send it.
+
+Native outbound actions:
+- Use top-level column-zero hidden Markdown comments outside code, quotes, and lists; the bridge handles them after agent_end, so do not call or register transport/TTS/text-to-OGG tools.
+- \`telegram_voice\`: text is synthesized through the configured outbound-handler pipeline. Use body text for multiline voice, \`<!-- telegram_voice text="Short summary" -->\` for explicit one-line voice, or \`<!-- telegram_voice: Short summary -->\` for one-line voice with no attributes. A companion summary is optional, no specific summary format is required. Keep it TTS-friendly; avoid raw Markdown, code, formulas, tables, or long lists.
+- \`telegram_button\`: callback prompt is routed back as a normal Telegram turn. Use \`<!-- telegram_button: OK -->\` when prompt equals label, \`<!-- telegram_button label=Continue prompt="Continue with the current plan." -->\` for one-line prompts, or body form \`<!-- telegram_button label="Show risks"\nList the main risks first.\n-->\` for multiline prompts.
+- If only hidden action comments would remain, add visible parent text like "Choose one:".
+`;
 
 const TELEGRAM_TRANSLATION_LINE = `\n- The current user message came from Telegram.`;
+
 
 // ---------------------------------------------------------------------------
 // Telegram prefix detection

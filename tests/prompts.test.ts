@@ -88,14 +88,15 @@ test("createTelegramBeforeAgentStartHook sync path for English Telegram messages
     !result.systemPrompt.includes("Language Detection"),
     "Should NOT include language detection for English",
   );
+
 });
 
-test("createTelegramBeforeAgentStartHook sync path for non-Telegram messages", () => {
+test("createTelegramBeforeAgentStartHook sync path for non-Telegram messages", async () => {
   const hook = createTelegramBeforeAgentStartHook({
     telegramPrefix: "[telegram]",
     systemPromptSuffix: "\nbase suffix",
   });
-  const result = hook(
+  const result = await hook(
     createBeforeAgentStartEvent("local command", "base"),
   );
   assert.equal(result.systemPrompt, "base\nbase suffix");
@@ -238,4 +239,34 @@ test("pruneTelegramBridgeLogs keeps at most MAX_LOG_ENTRIES entries", () => {
 test("pruneTelegramBridgeLogs handles missing log file gracefully", () => {
   pruneTelegramBridgeLogs();
   assert.ok(true, "Should not throw when log file is missing");
+});
+
+// ---------------------------------------------------------------------------
+// System prompt content validation (upstream)
+// ---------------------------------------------------------------------------
+
+test("default system prompt includes all expected sections", async () => {
+  const hook = createTelegramBeforeAgentStartHook({
+    telegramPrefix: "[telegram]",
+  });
+  const result = await hook(
+    createBeforeAgentStartEvent(" [telegram] Hello world", "base"),
+  );
+  const defaultSystemPrompt = result.systemPrompt;
+  assert.match(defaultSystemPrompt, /prefer narrow table columns/);
+  assert.match(defaultSystemPrompt, /`\[reply\]` is quoted context/);
+  assert.match(defaultSystemPrompt, /not a new instruction by itself/);
+  assert.match(
+    defaultSystemPrompt,
+    /`\[outputs\]` contains inbound-handler stdout/,
+  );
+  assert.match(defaultSystemPrompt, /telegram_attach/);
+  assert.match(defaultSystemPrompt, /telegram_voice text="Short summary"/);
+  assert.match(defaultSystemPrompt, /telegram_button: OK/);
+  assert.match(defaultSystemPrompt, /telegram_button label=Continue prompt=/);
+  assert.match(
+    defaultSystemPrompt,
+    /do not call or register transport\/TTS\/text-to-OGG tools/,
+  );
+  assert.match(defaultSystemPrompt, /no specific summary format is required/);
 });

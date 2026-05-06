@@ -93,7 +93,10 @@ test("Extension entrypoint wires domain bindings into the pi API", () => {
 test("Extension before-agent-start hook appends Telegram-specific guidance", async () => {
   const harness = createIndexApiHarness();
   telegramExtension(harness.api);
-  const handler = getRequiredIndexHandler(harness.handlers, "before_agent_start");
+  const handler = getRequiredIndexHandler(
+    harness.handlers,
+    "before_agent_start",
+  );
   const basePrompt = "System base";
   const telegramResult = await handler(
     { systemPrompt: basePrompt, prompt: "[telegram] hello" },

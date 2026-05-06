@@ -12,10 +12,10 @@ import testRoot, { mock, type TestContext } from "node:test";
 import * as Runtime from "../lib/runtime.ts";
 
 type RuntimeTestHandler = (context: TestContext) => void | Promise<void>;
-type RuntimeTelegramExtension = typeof import("../index.ts")["default"];
+type RuntimeTelegramExtension = (typeof import("../index.ts"))["default"];
 
 function test(name: string, fn: RuntimeTestHandler): void {
-  void testRoot(name, { concurrency: false }, fn);
+  void testRoot(name, { concurrency: false, timeout: 5000 }, fn);
 }
 
 let runtimeTelegramExtension: RuntimeTelegramExtension | undefined;
@@ -23,7 +23,9 @@ let runtimeAgentDir: string | undefined;
 
 async function ensureRuntimeAgentDir(): Promise<string> {
   if (!runtimeAgentDir) {
-    runtimeAgentDir = await mkdtemp(join(tmpdir(), "pi-telegram-runtime-agent-"));
+    runtimeAgentDir = await mkdtemp(
+      join(tmpdir(), "pi-telegram-runtime-agent-"),
+    );
     process.env.PI_CODING_AGENT_DIR = runtimeAgentDir;
   }
   return runtimeAgentDir;
@@ -39,12 +41,6 @@ async function getRuntimeTelegramExtension(): Promise<RuntimeTelegramExtension> 
 async function flushMicrotasks(iterations = 10): Promise<void> {
   for (let i = 0; i < iterations; i++) {
     await Promise.resolve();
-  }
-}
-
-async function flushEventLoop(iterations = 5): Promise<void> {
-  for (let i = 0; i < iterations; i++) {
-    await new Promise((resolve) => setImmediate(resolve));
   }
 }
 
@@ -150,7 +146,9 @@ function createRuntimeModel(
   id: string,
   reasoning?: boolean,
 ): RuntimeModelFixture {
-  return reasoning === undefined ? { provider, id } : { provider, id, reasoning };
+  return reasoning === undefined
+    ? { provider, id }
+    : { provider, id, reasoning };
 }
 
 type RuntimeModelContextOptions = {
@@ -218,6 +216,7 @@ type RuntimePiHarnessOptions = {
   getThinkingLevel?: () => string;
   setModel?: (model: { provider: string; id: string }) => Promise<boolean>;
   setThinkingLevel?: (level: string) => void;
+  getCommands?: () => unknown[];
 };
 
 function createRuntimePiHarness(options: RuntimePiHarnessOptions = {}) {
@@ -232,6 +231,7 @@ function createRuntimePiHarness(options: RuntimePiHarnessOptions = {}) {
     },
     registerTool: () => {},
     sendUserMessage: options.sendUserMessage ?? (() => {}),
+    getCommands: options.getCommands ?? (() => []),
     getThinkingLevel: options.getThinkingLevel ?? (() => "medium"),
     ...(options.setModel ? { setModel: options.setModel } : {}),
     ...(options.setThinkingLevel
@@ -524,7 +524,7 @@ test("Typing loop starter binds default chat and reports failures", async () => 
   });
   startFailingTypingLoop({ id: "ctx" }, 8);
   await flushMicrotasks();
-  assert.deepEqual(failingStatusErrors, []);
+  assert.deepEqual(failingStatusErrors, ["boom"]);
   assert.deepEqual(runtimeEvents, ["typing:boom:8"]);
   assert.equal(runtime.typing.stop(), true);
 });
@@ -644,7 +644,9 @@ test("Extension runtime finalizes a drafted preview into the final Telegram repl
     if (method === "sendMessage") {
       sentTexts.push(String(body?.text ?? ""));
       sentBodies.push(body ?? {});
-      return createRuntimeTelegramApiResponse({ message_id: 100 + sentTexts.length });
+      return createRuntimeTelegramApiResponse({
+        message_id: 100 + sentTexts.length,
+      });
     }
     if (method === "sendChatAction") {
       return createRuntimeTelegramApiResponse(true);
@@ -657,7 +659,11 @@ test("Extension runtime finalizes a drafted preview into the final Telegram repl
   });
   try {
     mock.timers.enable({ apis: ["setTimeout"] });
-    await telegramConfig.write({ botToken: "123:abc", allowedUserId: 77, lastUpdateId: 0 });
+    await telegramConfig.write({
+      botToken: "123:abc",
+      allowedUserId: 77,
+      lastUpdateId: 0,
+    });
     (await getRuntimeTelegramExtension())(pi);
     const ctx = createRuntimeExtensionContext();
     await handlers.get("session_start")?.({}, ctx);
@@ -746,7 +752,9 @@ test("Extension runtime clears queued follow-ups after a Telegram stop", async (
     }
     if (method === "sendMessage") {
       sendTexts.push(String(body?.text ?? ""));
-      return createRuntimeTelegramApiResponse({ message_id: 100 + sendTexts.length });
+      return createRuntimeTelegramApiResponse({
+        message_id: 100 + sendTexts.length,
+      });
     }
     if (method === "sendChatAction") {
       return createRuntimeTelegramApiResponse(true);
@@ -754,7 +762,11 @@ test("Extension runtime clears queued follow-ups after a Telegram stop", async (
     throw new Error(`Unexpected Telegram API method: ${method}`);
   });
   try {
-    await telegramConfig.write({ botToken: "123:abc", allowedUserId: 77, lastUpdateId: 0 });
+    await telegramConfig.write({
+      botToken: "123:abc",
+      allowedUserId: 77,
+      lastUpdateId: 0,
+    });
     (await getRuntimeTelegramExtension())(pi);
     const idleCtx = createRuntimeExtensionContext();
     let aborted = false;
@@ -768,31 +780,35 @@ test("Extension runtime clears queued follow-ups after a Telegram stop", async (
     await commands.get("telegram-connect")?.handler("", idleCtx);
     await waitForCondition(() => firstDispatchResolved);
     await handlers.get("agent_start")?.({}, activeCtx);
-    secondUpdates.resolve(createRuntimeTelegramApiResponse([
-      {
-        _: "other",
-        update_id: 2,
-        message: {
-          message_id: 11,
-          chat: { id: 99, type: "private" },
-          from: { id: 77, is_bot: false, first_name: "Test" },
-          text: "follow up",
+    secondUpdates.resolve(
+      createRuntimeTelegramApiResponse([
+        {
+          _: "other",
+          update_id: 2,
+          message: {
+            message_id: 11,
+            chat: { id: 99, type: "private" },
+            from: { id: 77, is_bot: false, first_name: "Test" },
+            text: "follow up",
+          },
         },
-      },
-    ]));
+      ]),
+    );
     await waitForCondition(() => getUpdatesCalls >= 3);
-    thirdUpdates.resolve(createRuntimeTelegramApiResponse([
-      {
-        _: "other",
-        update_id: 3,
-        message: {
-          message_id: 12,
-          chat: { id: 99, type: "private" },
-          from: { id: 77, is_bot: false, first_name: "Test" },
-          text: "/stop",
+    thirdUpdates.resolve(
+      createRuntimeTelegramApiResponse([
+        {
+          _: "other",
+          update_id: 3,
+          message: {
+            message_id: 12,
+            chat: { id: 99, type: "private" },
+            from: { id: 77, is_bot: false, first_name: "Test" },
+            text: "/stop",
+          },
         },
-      },
-    ]));
+      ]),
+    );
     await waitForCondition(() => aborted);
     await handlers.get("agent_end")?.(
       {
@@ -807,22 +823,25 @@ test("Extension runtime clears queued follow-ups after a Telegram stop", async (
       idleCtx,
     );
     const dispatchCountBeforeNextTurn = sentMessages.length;
-    fourthUpdates.resolve(createRuntimeTelegramApiResponse([
-      {
-        _: "other",
-        update_id: 4,
-        message: {
-          message_id: 13,
-          chat: { id: 99, type: "private" },
-          from: { id: 77, is_bot: false, first_name: "Test" },
-          text: "new request",
+    fourthUpdates.resolve(
+      createRuntimeTelegramApiResponse([
+        {
+          _: "other",
+          update_id: 4,
+          message: {
+            message_id: 13,
+            chat: { id: 99, type: "private" },
+            from: { id: 77, is_bot: false, first_name: "Test" },
+            text: "new request",
+          },
         },
-      },
-    ]));
+      ]),
+    );
     await waitForCondition(
       () => sentMessages.length === dispatchCountBeforeNextTurn + 1,
     );
-    const promptText = getRuntimeHarnessTextBlock(sentMessages.at(-1)).text ?? "";
+    const promptText =
+      getRuntimeHarnessTextBlock(sentMessages.at(-1)).text ?? "";
     assert.equal(promptText, "[telegram] new request");
     assert.equal(promptText.includes("follow up"), false);
     assert.equal(
@@ -840,6 +859,7 @@ test("Extension runtime handles immediate status before queued prompt after agen
   const telegramConfig = await createRuntimeTelegramConfigFixture();
   const runtimeEvents: string[] = [];
   let firstDispatchResolved = false;
+  let shutdownCtx: unknown;
   const secondUpdates = createRuntimeDeferredResponse();
   const thirdUpdates = createRuntimeDeferredResponse();
   const { handlers, commands, pi } = createRuntimePiHarness({
@@ -852,9 +872,8 @@ test("Extension runtime handles immediate status before queued prompt after agen
   const restoreFetch = setRuntimeTestFetch(async (input, init) => {
     const method = getRuntimeTelegramApiMethod(input);
     const body = parseJsonRequestBody(init);
-    if (method === "deleteWebhook") {
+    if (method === "deleteWebhook")
       return createRuntimeTelegramApiResponse(true);
-    }
     if (method === "getUpdates") {
       getUpdatesCalls += 1;
       if (getUpdatesCalls === 1) {
@@ -877,15 +896,20 @@ test("Extension runtime handles immediate status before queued prompt after agen
     }
     if (method === "sendMessage") {
       runtimeEvents.push(`send:${String(body?.text ?? "")}`);
-      return createRuntimeTelegramApiResponse({ message_id: 100 + runtimeEvents.length });
+      return createRuntimeTelegramApiResponse({
+        message_id: 100 + runtimeEvents.length,
+      });
     }
-    if (method === "sendChatAction") {
+    if (method === "sendChatAction")
       return createRuntimeTelegramApiResponse(true);
-    }
     throw new Error(`Unexpected Telegram API method: ${method}`);
   });
   try {
-    await telegramConfig.write({ botToken: "123:abc", allowedUserId: 77, lastUpdateId: 0 });
+    await telegramConfig.write({
+      botToken: "123:abc",
+      allowedUserId: 77,
+      lastUpdateId: 0,
+    });
     (await getRuntimeTelegramExtension())(pi);
     const baseCtx = createRuntimeExtensionContext({
       cwd: process.cwd(),
@@ -907,35 +931,40 @@ test("Extension runtime handles immediate status before queued prompt after agen
       ...baseCtx,
       isIdle: () => false,
     };
+    shutdownCtx = idleCtx;
     await handlers.get("session_start")?.({}, idleCtx);
     await commands.get("telegram-connect")?.handler("", idleCtx);
     await waitForCondition(() => firstDispatchResolved);
     await handlers.get("agent_start")?.({}, activeCtx);
-    secondUpdates.resolve(createRuntimeTelegramApiResponse([
-      {
-        _: "other",
-        update_id: 2,
-        message: {
-          message_id: 21,
-          chat: { id: 99, type: "private" },
-          from: { id: 77, is_bot: false, first_name: "Test" },
-          text: "/status",
+    secondUpdates.resolve(
+      createRuntimeTelegramApiResponse([
+        {
+          _: "other",
+          update_id: 2,
+          message: {
+            message_id: 21,
+            chat: { id: 99, type: "private" },
+            from: { id: 77, is_bot: false, first_name: "Test" },
+            text: "/status",
+          },
         },
-      },
-    ]));
+      ]),
+    );
     await waitForCondition(() => getUpdatesCalls >= 3);
-    thirdUpdates.resolve(createRuntimeTelegramApiResponse([
-      {
-        _: "other",
-        update_id: 3,
-        message: {
-          message_id: 22,
-          chat: { id: 99, type: "private" },
-          from: { id: 77, is_bot: false, first_name: "Test" },
-          text: "follow up after status",
+    thirdUpdates.resolve(
+      createRuntimeTelegramApiResponse([
+        {
+          _: "other",
+          update_id: 3,
+          message: {
+            message_id: 22,
+            chat: { id: 99, type: "private" },
+            from: { id: 77, is_bot: false, first_name: "Test" },
+            text: "follow up after status",
+          },
         },
-      },
-    ]));
+      ]),
+    );
     await waitForCondition(() => runtimeEvents.length >= 1);
     await handlers.get("agent_end")?.(
       {
@@ -950,13 +979,13 @@ test("Extension runtime handles immediate status before queued prompt after agen
     );
     await waitForCondition(() => runtimeEvents.length >= 3);
     assert.equal(runtimeEvents[0], "dispatch:[telegram] first request");
-    assert.match(runtimeEvents[1] ?? "", /^send:<b>Context:<\/b>/);
+    assert.match(runtimeEvents[1] ?? "", /^send:<b>π Telegram bridge<\/b>/);
     assert.equal(
       runtimeEvents[2],
       "dispatch:[telegram] follow up after status",
     );
-    await handlers.get("session_shutdown")?.({}, idleCtx);
   } finally {
+    if (shutdownCtx) await handlers.get("session_shutdown")?.({}, shutdownCtx);
     restoreFetch();
     await telegramConfig.restore();
   }
@@ -1005,7 +1034,9 @@ test("Extension runtime opens immediate model menu before queued prompt after ag
     }
     if (method === "sendMessage") {
       runtimeEvents.push(`send:${String(body?.text ?? "")}`);
-      return createRuntimeTelegramApiResponse({ message_id: 100 + runtimeEvents.length });
+      return createRuntimeTelegramApiResponse({
+        message_id: 100 + runtimeEvents.length,
+      });
     }
     if (method === "sendChatAction") {
       return createRuntimeTelegramApiResponse(true);
@@ -1013,7 +1044,11 @@ test("Extension runtime opens immediate model menu before queued prompt after ag
     throw new Error(`Unexpected Telegram API method: ${method}`);
   });
   try {
-    await telegramConfig.write({ botToken: "123:abc", allowedUserId: 77, lastUpdateId: 0 });
+    await telegramConfig.write({
+      botToken: "123:abc",
+      allowedUserId: 77,
+      lastUpdateId: 0,
+    });
     (await getRuntimeTelegramExtension())(pi);
     const baseCtx = createRuntimeExtensionContext({
       cwd: process.cwd(),
@@ -1040,31 +1075,35 @@ test("Extension runtime opens immediate model menu before queued prompt after ag
     await commands.get("telegram-connect")?.handler("", idleCtx);
     await waitForCondition(() => firstDispatchResolved);
     await handlers.get("agent_start")?.({}, activeCtx);
-    secondUpdates.resolve(createRuntimeTelegramApiResponse([
-      {
-        _: "other",
-        update_id: 2,
-        message: {
-          message_id: 24,
-          chat: { id: 99, type: "private" },
-          from: { id: 77, is_bot: false, first_name: "Test" },
-          text: "/model",
+    secondUpdates.resolve(
+      createRuntimeTelegramApiResponse([
+        {
+          _: "other",
+          update_id: 2,
+          message: {
+            message_id: 24,
+            chat: { id: 99, type: "private" },
+            from: { id: 77, is_bot: false, first_name: "Test" },
+            text: "/model",
+          },
         },
-      },
-    ]));
+      ]),
+    );
     await waitForCondition(() => getUpdatesCalls >= 3);
-    thirdUpdates.resolve(createRuntimeTelegramApiResponse([
-      {
-        _: "other",
-        update_id: 3,
-        message: {
-          message_id: 25,
-          chat: { id: 99, type: "private" },
-          from: { id: 77, is_bot: false, first_name: "Test" },
-          text: "follow up after model",
+    thirdUpdates.resolve(
+      createRuntimeTelegramApiResponse([
+        {
+          _: "other",
+          update_id: 3,
+          message: {
+            message_id: 25,
+            chat: { id: 99, type: "private" },
+            from: { id: 77, is_bot: false, first_name: "Test" },
+            text: "follow up after model",
+          },
         },
-      },
-    ]));
+      ]),
+    );
     await waitForCondition(() => runtimeEvents.length >= 1);
     await handlers.get("agent_end")?.(
       {
@@ -1079,7 +1118,7 @@ test("Extension runtime opens immediate model menu before queued prompt after ag
     );
     await waitForCondition(() => runtimeEvents.length >= 3);
     assert.equal(runtimeEvents[0], "dispatch:[telegram] first request");
-    assert.equal(runtimeEvents[1], "send:<b>Choose a model:</b>");
+    assert.equal(runtimeEvents[1], "send:<b>🤖 Choose a model:</b>");
     assert.equal(runtimeEvents[2], "dispatch:[telegram] follow up after model");
     await handlers.get("session_shutdown")?.({}, idleCtx);
   } finally {
@@ -1133,12 +1172,18 @@ test("Extension runtime keeps queued turns blocked until compaction completes", 
     }
     if (method === "sendMessage") {
       runtimeEvents.push(`send:${String(body?.text ?? "")}`);
-      return createRuntimeTelegramApiResponse({ message_id: 100 + runtimeEvents.length });
+      return createRuntimeTelegramApiResponse({
+        message_id: 100 + runtimeEvents.length,
+      });
     }
     throw new Error(`Unexpected Telegram API method: ${method}`);
   });
   try {
-    await telegramConfig.write({ botToken: "123:abc", allowedUserId: 77, lastUpdateId: 0 });
+    await telegramConfig.write({
+      botToken: "123:abc",
+      allowedUserId: 77,
+      lastUpdateId: 0,
+    });
     (await getRuntimeTelegramExtension())(pi);
     const ctx = createRuntimeExtensionContext({
       compact: (hooks: {
@@ -1153,18 +1198,20 @@ test("Extension runtime keeps queued turns blocked until compaction completes", 
     await commands.get("telegram-connect")?.handler("", ctx);
     await waitForCondition(() => runtimeEvents.includes("compact:start"));
     assert.equal(runtimeEvents.includes("send:Compaction started."), true);
-    secondUpdates.resolve(createRuntimeTelegramApiResponse([
-      {
-        _: "other",
-        update_id: 2,
-        message: {
-          message_id: 31,
-          chat: { id: 99, type: "private" },
-          from: { id: 77, is_bot: false, first_name: "Test" },
-          text: "follow up after compaction",
+    secondUpdates.resolve(
+      createRuntimeTelegramApiResponse([
+        {
+          _: "other",
+          update_id: 2,
+          message: {
+            message_id: 31,
+            chat: { id: 99, type: "private" },
+            from: { id: 77, is_bot: false, first_name: "Test" },
+            text: "follow up after compaction",
+          },
         },
-      },
-    ]));
+      ]),
+    );
     await waitForCondition(() => getUpdatesCalls >= 3);
     assert.equal(
       runtimeEvents.some(
@@ -1233,26 +1280,146 @@ test("Extension runtime coalesces media-group updates into one delayed dispatch"
     throw new Error(`Unexpected Telegram API method: ${method}`);
   });
   try {
-    mock.timers.enable({ apis: ["setTimeout"] });
-    await telegramConfig.write({ botToken: "123:abc", allowedUserId: 77, lastUpdateId: 0 });
+    await telegramConfig.write({
+      botToken: "123:abc",
+      allowedUserId: 77,
+      lastUpdateId: 0,
+    });
     (await getRuntimeTelegramExtension())(pi);
     const ctx = createRuntimeExtensionContext();
     await handlers.get("session_start")?.({}, ctx);
     await commands.get("telegram-connect")?.handler("", ctx);
     await waitForEventLoopCondition(() => getUpdatesCalls >= 2, 5000);
-    mock.timers.tick(1199);
-    await flushMicrotasks();
     assert.equal(runtimeEvents.length, 0);
-    mock.timers.tick(1);
-    await flushMicrotasks(20);
-    assert.equal(runtimeEvents.length, 1);
+    await waitForCondition(() => runtimeEvents.length === 1, 3000);
     assert.equal(
       runtimeEvents[0],
       "dispatch:[telegram] first caption\n\nsecond caption",
     );
     await handlers.get("session_shutdown")?.({}, ctx);
   } finally {
-    mock.timers.reset();
+    restoreFetch();
+    await telegramConfig.restore();
+  }
+});
+
+test("Extension runtime coalesces likely split long text updates into one dispatch", async () => {
+  const telegramConfig = await createRuntimeTelegramConfigFixture();
+  const runtimeEvents: string[] = [];
+  const { handlers, commands, pi } = createRuntimePiHarness({
+    sendUserMessage: (content) => {
+      recordRuntimeDispatchEvent(runtimeEvents, content);
+    },
+  });
+  let getUpdatesCalls = 0;
+  const restoreFetch = setRuntimeTestFetch(async (input) => {
+    const method = getRuntimeTelegramApiMethod(input);
+    if (method === "deleteWebhook") {
+      return createRuntimeTelegramApiResponse(true);
+    }
+    if (method === "getUpdates") {
+      getUpdatesCalls += 1;
+      if (getUpdatesCalls === 1) {
+        return createRuntimeTelegramApiResponse([
+          {
+            _: "other",
+            update_id: 1,
+            message: {
+              message_id: 50,
+              chat: { id: 99, type: "private" },
+              from: { id: 77, is_bot: false, first_name: "Test" },
+              text: "x".repeat(3600),
+            },
+          },
+          {
+            _: "other",
+            update_id: 2,
+            message: {
+              message_id: 51,
+              chat: { id: 99, type: "private" },
+              from: { id: 77, is_bot: false, first_name: "Test" },
+              text: "tail",
+            },
+          },
+        ]);
+      }
+      throw new DOMException("stop", "AbortError");
+    }
+    throw new Error(`Unexpected Telegram API method: ${method}`);
+  });
+  try {
+    await telegramConfig.write({
+      botToken: "123:abc",
+      allowedUserId: 77,
+      lastUpdateId: 0,
+    });
+    (await getRuntimeTelegramExtension())(pi);
+    const ctx = createRuntimeExtensionContext();
+    await handlers.get("session_start")?.({}, ctx);
+    await commands.get("telegram-connect")?.handler("", ctx);
+    await waitForEventLoopCondition(() => getUpdatesCalls >= 2, 5000);
+    assert.equal(runtimeEvents.length, 0);
+    await waitForCondition(() => runtimeEvents.length === 1, 3000);
+    assert.equal(
+      runtimeEvents[0],
+      `dispatch:[telegram] ${"x".repeat(3600)}\n\ntail`,
+    );
+    await handlers.get("session_shutdown")?.({}, ctx);
+  } finally {
+    restoreFetch();
+    await telegramConfig.restore();
+  }
+});
+
+test("Extension runtime clears pending split-text dispatch on shutdown", async () => {
+  const telegramConfig = await createRuntimeTelegramConfigFixture();
+  const runtimeEvents: string[] = [];
+  const { handlers, commands, pi } = createRuntimePiHarness({
+    sendUserMessage: (content) => {
+      recordRuntimeDispatchEvent(runtimeEvents, content);
+    },
+  });
+  let getUpdatesCalls = 0;
+  const restoreFetch = setRuntimeTestFetch(async (input) => {
+    const method = getRuntimeTelegramApiMethod(input);
+    if (method === "deleteWebhook") {
+      return createRuntimeTelegramApiResponse(true);
+    }
+    if (method === "getUpdates") {
+      getUpdatesCalls += 1;
+      if (getUpdatesCalls === 1) {
+        return createRuntimeTelegramApiResponse([
+          {
+            _: "other",
+            update_id: 1,
+            message: {
+              message_id: 60,
+              chat: { id: 99, type: "private" },
+              from: { id: 77, is_bot: false, first_name: "Test" },
+              text: "x".repeat(3600),
+            },
+          },
+        ]);
+      }
+      throw new DOMException("stop", "AbortError");
+    }
+    throw new Error(`Unexpected Telegram API method: ${method}`);
+  });
+  try {
+    await telegramConfig.write({
+      botToken: "123:abc",
+      allowedUserId: 77,
+      lastUpdateId: 0,
+    });
+    (await getRuntimeTelegramExtension())(pi);
+    const ctx = createRuntimeExtensionContext();
+    await handlers.get("session_start")?.({}, ctx);
+    await commands.get("telegram-connect")?.handler("", ctx);
+    await waitForEventLoopCondition(() => getUpdatesCalls >= 2, 5000);
+    await handlers.get("session_shutdown")?.({}, ctx);
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    assert.deepEqual(runtimeEvents, []);
+  } finally {
     restoreFetch();
     await telegramConfig.restore();
   }
@@ -1306,7 +1473,11 @@ test("Extension runtime applies reaction priority and removal before the next di
     throw new Error(`Unexpected Telegram API method: ${method}`);
   });
   try {
-    await telegramConfig.write({ botToken: "123:abc", allowedUserId: 77, lastUpdateId: 0 });
+    await telegramConfig.write({
+      botToken: "123:abc",
+      allowedUserId: 77,
+      lastUpdateId: 0,
+    });
     (await getRuntimeTelegramExtension())(pi);
     const idleCtx = createRuntimeExtensionContext();
     const activeCtx = createRuntimeExtensionContext({
@@ -1316,62 +1487,71 @@ test("Extension runtime applies reaction priority and removal before the next di
     await commands.get("telegram-connect")?.handler("", idleCtx);
     await waitForCondition(() => firstDispatchResolved);
     await handlers.get("agent_start")?.({}, activeCtx);
-    secondUpdates.resolve(createRuntimeTelegramApiResponse([
-      {
-        _: "other",
-        update_id: 2,
-        message: {
-          message_id: 31,
-          chat: { id: 99, type: "private" },
-          from: { id: 77, is_bot: false, first_name: "Test" },
-          text: "older waiting",
+    secondUpdates.resolve(
+      createRuntimeTelegramApiResponse([
+        {
+          _: "other",
+          update_id: 2,
+          message: {
+            message_id: 31,
+            chat: { id: 99, type: "private" },
+            from: { id: 77, is_bot: false, first_name: "Test" },
+            text: "older waiting",
+          },
         },
-      },
-    ]));
+      ]),
+    );
     await waitForCondition(() => getUpdatesCalls >= 3);
-    thirdUpdates.resolve(createRuntimeTelegramApiResponse([
-      {
-        _: "other",
-        update_id: 3,
-        message: {
-          message_id: 32,
-          chat: { id: 99, type: "private" },
-          from: { id: 77, is_bot: false, first_name: "Test" },
-          text: "newer waiting",
+    thirdUpdates.resolve(
+      createRuntimeTelegramApiResponse([
+        {
+          _: "other",
+          update_id: 3,
+          message: {
+            message_id: 32,
+            chat: { id: 99, type: "private" },
+            from: { id: 77, is_bot: false, first_name: "Test" },
+            text: "newer waiting",
+          },
         },
-      },
-    ]));
+      ]),
+    );
     await waitForCondition(() => getUpdatesCalls >= 4);
-    fourthUpdates.resolve(createRuntimeTelegramApiResponse([
-      {
-        _: "other",
-        update_id: 4,
-        message_reaction: {
-          chat: { id: 99, type: "private" },
-          message_id: 32,
-          user: { id: 77, is_bot: false, first_name: "Test" },
-          old_reaction: [],
-          new_reaction: [{ type: "emoji", emoji: "👍" }],
-          date: 1,
+    fourthUpdates.resolve(
+      createRuntimeTelegramApiResponse([
+        {
+          _: "other",
+          update_id: 4,
+          message_reaction: {
+            chat: { id: 99, type: "private" },
+            message_id: 32,
+            user: { id: 77, is_bot: false, first_name: "Test" },
+            old_reaction: [],
+            new_reaction: [{ type: "emoji", emoji: "👍" }],
+            date: 1,
+          },
         },
-      },
-    ]));
+      ]),
+    );
     await waitForCondition(() => getUpdatesCalls >= 5);
-    fifthUpdates.resolve(createRuntimeTelegramApiResponse([
-      {
-        _: "other",
-        update_id: 5,
-        message_reaction: {
-          chat: { id: 99, type: "private" },
-          message_id: 31,
-          user: { id: 77, is_bot: false, first_name: "Test" },
-          old_reaction: [],
-          new_reaction: [{ type: "emoji", emoji: "👎" }],
-          date: 2,
+    fifthUpdates.resolve(
+      createRuntimeTelegramApiResponse([
+        {
+          _: "other",
+          update_id: 5,
+          message_reaction: {
+            chat: { id: 99, type: "private" },
+            message_id: 31,
+            user: { id: 77, is_bot: false, first_name: "Test" },
+            old_reaction: [],
+            new_reaction: [{ type: "emoji", emoji: "👎" }],
+            date: 2,
+          },
         },
-      },
-    ]));
+      ]),
+    );
     await waitForCondition(() => getUpdatesCalls >= 6);
+    await flushMicrotasks(50);
     await handlers.get("agent_end")?.(
       {
         messages: [
@@ -1419,6 +1599,7 @@ test("Extension runtime applies idle model picks immediately and refreshes statu
   const modelB = createRuntimeModel("anthropic", "claude-b", true);
   const setModels: Array<string> = [];
   const thinkingLevels: Array<string> = [];
+  let shutdownCtx: unknown;
   const secondUpdates = createRuntimeDeferredResponse();
   const { handlers, commands, pi } = createRuntimePiHarness({
     getThinkingLevel: () => thinkingLevels.at(-1) ?? "medium",
@@ -1436,9 +1617,8 @@ test("Extension runtime applies idle model picks immediately and refreshes statu
   const restoreFetch = setRuntimeTestFetch(async (input, init) => {
     const method = getRuntimeTelegramApiMethod(input);
     const body = parseJsonRequestBody(init);
-    if (method === "deleteWebhook") {
+    if (method === "deleteWebhook")
       return createRuntimeTelegramApiResponse(true);
-    }
     if (method === "getUpdates") {
       getUpdatesCalls += 1;
       if (getUpdatesCalls === 1) {
@@ -1470,9 +1650,8 @@ test("Extension runtime applies idle model picks immediately and refreshes statu
       callbackAnswers.push(String(body?.text ?? ""));
       return createRuntimeTelegramApiResponse(true);
     }
-    if (method === "sendChatAction") {
+    if (method === "sendChatAction")
       return createRuntimeTelegramApiResponse(true);
-    }
     throw new Error(`Unexpected Telegram API method: ${method}`);
   });
   try {
@@ -1481,7 +1660,11 @@ test("Extension runtime applies idle model picks immediately and refreshes statu
       previousArgv[1] ?? "index.ts",
       "--models=anthropic/claude-b:high",
     ];
-    await telegramConfig.write({ botToken: "123:abc", allowedUserId: 77, lastUpdateId: 0 });
+    await telegramConfig.write({
+      botToken: "123:abc",
+      allowedUserId: 77,
+      lastUpdateId: 0,
+    });
     (await getRuntimeTelegramExtension())(pi);
     const ctx = createRuntimeModelContext({
       model: modelA,
@@ -1490,38 +1673,43 @@ test("Extension runtime applies idle model picks immediately and refreshes statu
         statusEvents.push(text);
       },
     });
+    shutdownCtx = ctx;
     await handlers.get("session_start")?.({}, ctx);
     await commands.get("telegram-connect")?.handler("", ctx);
     await waitForCondition(() =>
-      runtimeEvents.some((event) => event === "send:<b>Choose a model:</b>"),
+      runtimeEvents.some((event) => event === "send:<b>🤖 Choose a model:</b>"),
     );
     const statusCountBeforePick = statusEvents.length;
-    secondUpdates.resolve(createRuntimeTelegramApiResponse([
-      {
-        _: "other",
-        update_id: 2,
-        callback_query: {
-          id: "cb-idle-1",
-          from: { id: 77, is_bot: false, first_name: "Test" },
-          data: "model:pick:0",
-          message: {
-            message_id: 100,
-            chat: { id: 99, type: "private" },
+    secondUpdates.resolve(
+      createRuntimeTelegramApiResponse([
+        {
+          _: "other",
+          update_id: 2,
+          callback_query: {
+            id: "cb-idle-1",
+            from: { id: 77, is_bot: false, first_name: "Test" },
+            data: "model:pick:0",
+            message: {
+              message_id: 100,
+              chat: { id: 99, type: "private" },
+            },
           },
         },
-      },
-    ]));
+      ]),
+    );
     await waitForCondition(() => setModels.length === 1);
     assert.deepEqual(setModels, ["anthropic/claude-b"]);
     assert.deepEqual(thinkingLevels, ["high"]);
     assert.equal(callbackAnswers.includes("Switched to claude-b"), true);
     assert.equal(statusEvents.length > statusCountBeforePick, true);
     assert.equal(
-      runtimeEvents.some((event) => event.startsWith("edit:<b>Context:")),
+      runtimeEvents.some((event) =>
+        event.startsWith("edit:<b>π Telegram bridge</b>"),
+      ),
       true,
     );
-    await handlers.get("session_shutdown")?.({}, ctx);
   } finally {
+    if (shutdownCtx) await handlers.get("session_shutdown")?.({}, shutdownCtx);
     process.argv = previousArgv;
     restoreFetch();
     await telegramConfig.restore();
@@ -1595,7 +1783,11 @@ test("Extension runtime switches model in flight and dispatches a continuation t
     throw new Error(`Unexpected Telegram API method: ${method}`);
   });
   try {
-    await telegramConfig.write({ botToken: "123:abc", allowedUserId: 77, lastUpdateId: 0 });
+    await telegramConfig.write({
+      botToken: "123:abc",
+      allowedUserId: 77,
+      lastUpdateId: 0,
+    });
     (await getRuntimeTelegramExtension())(pi);
     const ctx = createRuntimeModelContext({
       model: modelA,
@@ -1608,20 +1800,22 @@ test("Extension runtime switches model in flight and dispatches a continuation t
     await handlers.get("session_start")?.({}, ctx);
     await commands.get("telegram-connect")?.handler("", ctx);
     await waitForCondition(() =>
-      runtimeEvents.some((event) => event === "send:<b>Choose a model:</b>"),
+      runtimeEvents.some((event) => event === "send:<b>🤖 Choose a model:</b>"),
     );
-    secondUpdates.resolve(createRuntimeTelegramApiResponse([
-      {
-        _: "other",
-        update_id: 2,
-        message: {
-          message_id: 41,
-          chat: { id: 99, type: "private" },
-          from: { id: 77, is_bot: false, first_name: "Test" },
-          text: "first request",
+    secondUpdates.resolve(
+      createRuntimeTelegramApiResponse([
+        {
+          _: "other",
+          update_id: 2,
+          message: {
+            message_id: 41,
+            chat: { id: 99, type: "private" },
+            from: { id: 77, is_bot: false, first_name: "Test" },
+            text: "first request",
+          },
         },
-      },
-    ]));
+      ]),
+    );
     await waitForCondition(() =>
       runtimeEvents.some(
         (event) => event === "dispatch:[telegram] first request",
@@ -1629,21 +1823,23 @@ test("Extension runtime switches model in flight and dispatches a continuation t
     );
     idle = false;
     await handlers.get("agent_start")?.({}, ctx);
-    thirdUpdates.resolve(createRuntimeTelegramApiResponse([
-      {
-        _: "other",
-        update_id: 3,
-        callback_query: {
-          id: "cb-1",
-          from: { id: 77, is_bot: false, first_name: "Test" },
-          data: "model:pick:1",
-          message: {
-            message_id: 100,
-            chat: { id: 99, type: "private" },
+    thirdUpdates.resolve(
+      createRuntimeTelegramApiResponse([
+        {
+          _: "other",
+          update_id: 3,
+          callback_query: {
+            id: "cb-1",
+            from: { id: 77, is_bot: false, first_name: "Test" },
+            data: "model:pick:1",
+            message: {
+              message_id: 100,
+              chat: { id: 99, type: "private" },
+            },
           },
         },
-      },
-    ]));
+      ]),
+    );
     await waitForCondition(() => aborted);
     assert.deepEqual(setModels, ["anthropic/claude-b"]);
     assert.equal(
@@ -1756,7 +1952,11 @@ test("Extension runtime delays model-switch abort until the active tool finishes
     throw new Error(`Unexpected Telegram API method: ${method}`);
   });
   try {
-    await telegramConfig.write({ botToken: "123:abc", allowedUserId: 77, lastUpdateId: 0 });
+    await telegramConfig.write({
+      botToken: "123:abc",
+      allowedUserId: 77,
+      lastUpdateId: 0,
+    });
     (await getRuntimeTelegramExtension())(pi);
     const ctx = createRuntimeModelContext({
       model: modelA,
@@ -1769,20 +1969,22 @@ test("Extension runtime delays model-switch abort until the active tool finishes
     await handlers.get("session_start")?.({}, ctx);
     await commands.get("telegram-connect")?.handler("", ctx);
     await waitForCondition(() =>
-      runtimeEvents.some((event) => event === "send:<b>Choose a model:</b>"),
+      runtimeEvents.some((event) => event === "send:<b>🤖 Choose a model:</b>"),
     );
-    secondUpdates.resolve(createRuntimeTelegramApiResponse([
-      {
-        _: "other",
-        update_id: 2,
-        message: {
-          message_id: 51,
-          chat: { id: 99, type: "private" },
-          from: { id: 77, is_bot: false, first_name: "Test" },
-          text: "first request",
+    secondUpdates.resolve(
+      createRuntimeTelegramApiResponse([
+        {
+          _: "other",
+          update_id: 2,
+          message: {
+            message_id: 51,
+            chat: { id: 99, type: "private" },
+            from: { id: 77, is_bot: false, first_name: "Test" },
+            text: "first request",
+          },
         },
-      },
-    ]));
+      ]),
+    );
     await waitForCondition(() =>
       runtimeEvents.some(
         (event) => event === "dispatch:[telegram] first request",
@@ -1791,21 +1993,23 @@ test("Extension runtime delays model-switch abort until the active tool finishes
     idle = false;
     await handlers.get("agent_start")?.({}, ctx);
     await handlers.get("tool_execution_start")?.({}, ctx);
-    thirdUpdates.resolve(createRuntimeTelegramApiResponse([
-      {
-        _: "other",
-        update_id: 3,
-        callback_query: {
-          id: "cb-2",
-          from: { id: 77, is_bot: false, first_name: "Test" },
-          data: "model:pick:1",
-          message: {
-            message_id: 100,
-            chat: { id: 99, type: "private" },
+    thirdUpdates.resolve(
+      createRuntimeTelegramApiResponse([
+        {
+          _: "other",
+          update_id: 3,
+          callback_query: {
+            id: "cb-2",
+            from: { id: 77, is_bot: false, first_name: "Test" },
+            data: "model:pick:1",
+            message: {
+              message_id: 100,
+              chat: { id: 99, type: "private" },
+            },
           },
         },
-      },
-    ]));
+      ]),
+    );
     await waitForCondition(() =>
       callbackAnswers.includes(
         "Switched to claude-b. Restarting after the current tool finishes…",

@@ -1,14 +1,15 @@
 /**
  * Telegram bridge config and pairing helpers
+ * Zones: telegram config, pairing, filesystem
  * Owns persisted bot/session pairing state, local config storage, authorization policy, and first-user pairing side effects
  */
 
 import { existsSync } from "node:fs";
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
-import type { TelegramAttachmentHandlerConfig } from "./attachment-handlers.ts";
+import type { TelegramInboundHandlerConfig } from "./inbound-handlers.ts";
 import type { CommandTemplateObjectConfig } from "./command-templates.ts";
 
 function getAgentDir(): string {
@@ -38,7 +39,8 @@ export interface TelegramConfig {
   botId?: number;
   allowedUserId?: number;
   lastUpdateId?: number;
-  attachmentHandlers?: TelegramAttachmentHandlerConfig[];
+  inboundHandlers?: TelegramInboundHandlerConfig[];
+  attachmentHandlers?: TelegramInboundHandlerConfig[];
   outboundHandlers?: TelegramOutboundHandlerConfig[];
 }
 
@@ -49,7 +51,8 @@ export interface TelegramConfigStore {
   getBotToken: () => string | undefined;
   hasBotToken: () => boolean;
   getAllowedUserId: () => number | undefined;
-  getAttachmentHandlers: () => TelegramAttachmentHandlerConfig[] | undefined;
+  getInboundHandlers: () => TelegramInboundHandlerConfig[] | undefined;
+  getAttachmentHandlers: () => TelegramInboundHandlerConfig[] | undefined;
   getOutboundHandlers: () => TelegramOutboundHandlerConfig[] | undefined;
   setAllowedUserId: (userId: number) => void;
   load: () => Promise<void>;
@@ -76,10 +79,13 @@ export async function writeTelegramConfig(
   config: TelegramConfig,
 ): Promise<void> {
   await mkdir(agentDir, { recursive: true });
-  await writeFile(configPath, JSON.stringify(config, null, "\t") + "\n", {
+  const tempConfigPath = `${configPath}.tmp-${process.pid}-${Date.now()}`;
+  await writeFile(tempConfigPath, JSON.stringify(config, null, "\t") + "\n", {
     encoding: "utf8",
     mode: 0o600,
   });
+  await chmod(tempConfigPath, 0o600);
+  await rename(tempConfigPath, configPath);
   await chmod(configPath, 0o600);
 }
 
@@ -100,6 +106,10 @@ export function createTelegramConfigStore(
     getBotToken: () => config.botToken,
     hasBotToken: () => !!config.botToken,
     getAllowedUserId: () => config.allowedUserId,
+    getInboundHandlers: () => [
+      ...(config.inboundHandlers ?? []),
+      ...(config.attachmentHandlers ?? []),
+    ],
     getAttachmentHandlers: () => config.attachmentHandlers,
     getOutboundHandlers: () => config.outboundHandlers,
     setAllowedUserId: (userId) => {

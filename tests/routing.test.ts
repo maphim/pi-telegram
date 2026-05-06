@@ -12,6 +12,7 @@ import * as Model from "../lib/model.ts";
 import * as Queue from "../lib/queue.ts";
 import * as Routing from "../lib/routing.ts";
 import * as Runtime from "../lib/runtime.ts";
+import * as TextGroups from "../lib/text-groups.ts";
 import type * as Updates from "../lib/updates.ts";
 
 interface TestContext {
@@ -91,6 +92,9 @@ test("Routing runtime forwards authorized text messages into prompt queueing", a
     openModelMenu: async () => {
       events.push("model-menu");
     },
+    openThinkingMenu: async () => {
+      events.push("thinking-menu");
+    },
   };
   const routeRuntime = Routing.createTelegramInboundRouteRuntime<
     TestUpdate,
@@ -106,15 +110,17 @@ test("Routing runtime forwards authorized text messages into prompt queueing", a
     },
     bridgeRuntime,
     activeTurnRuntime,
-    mediaGroupRuntime:
-      Media.createTelegramMediaGroupController<TestMessage, TestContext>(),
+    mediaGroupRuntime: Media.createTelegramMediaGroupController<TestMessage>(),
+    textGroupRuntime: TextGroups.createTelegramTextGroupController<TestMessage, TestContext>(),
     telegramQueueStore,
     queueMutationRuntime,
     modelMenuRuntime: Menu.createTelegramModelMenuRuntime<TestModel>(),
     currentModelRuntime,
     modelSwitchController,
     menuActions,
-    attachmentHandlerRuntime: {
+    openQueueMenu: async () => undefined,
+    queueMenuCallbackHandler: async () => false,
+    inboundHandlerRuntime: {
       process: async (files, rawText) => ({
         rawText,
         promptFiles: files,
@@ -124,13 +130,19 @@ test("Routing runtime forwards authorized text messages into prompt queueing", a
     },
     updateStatus: () => events.push("status"),
     dispatchNextQueuedTelegramTurn: () => events.push("dispatch"),
-    answerCallbackQuery: async () => undefined,
+    answerCallbackQuery: async (callbackQueryId) => {
+      events.push(`answer:${callbackQueryId}`);
+    },
     sendTextReply: async () => undefined,
     setMyCommands: async () => undefined,
+    getCommands: () => [],
     downloadFile: async (_fileId, fileName) => `/tmp/${fileName}`,
     getThinkingLevel: () => "high",
     setThinkingLevel: () => undefined,
     setModel: async () => true,
+    sendUserMessage: (message) => {
+      events.push(`user:${message}`);
+    },
     isIdle: () => true,
     hasPendingMessages: () => false,
     compact: () => undefined,
@@ -154,4 +166,73 @@ test("Routing runtime forwards authorized text messages into prompt queueing", a
     "[telegram] hello from telegram",
   );
   assert.deepEqual(events, ["status", "dispatch"]);
+  await routeRuntime.handleUpdate(
+    {
+      message: {
+        message_id: 12,
+        chat: { id: 100, type: "private" },
+        from: { id: 7, is_bot: false },
+        text: "/continue",
+      },
+    },
+    { cwd: "/repo" },
+  );
+  const [continueTurn] = telegramQueueStore.getQueuedItems();
+  assert.equal(continueTurn?.kind, "prompt");
+  assert.equal(continueTurn?.queueLane, "priority");
+  assert.equal(continueTurn?.statusSummary, "continue");
+  assert.equal(
+    continueTurn?.content[0]?.type === "text"
+      ? continueTurn.content[0].text
+      : "",
+    "[telegram] continue",
+  );
+  await routeRuntime.handleUpdate(
+    {
+      callback_query: {
+        id: "cb-custom",
+        from: { id: 7, is_bot: false },
+        data: "vividfish:approve:123",
+        message: {
+          message_id: 13,
+          chat: { id: 100, type: "private" },
+          from: { id: 7, is_bot: false },
+        },
+      },
+    },
+    { cwd: "/repo" },
+  );
+  const ownedCallbackData = [
+    "tgbtn:expired",
+    "menu:model",
+    "model:pick:0",
+    "thinking:set:high",
+    "status:model",
+    "queue:list",
+  ];
+  for (const [index, data] of ownedCallbackData.entries()) {
+    await routeRuntime.handleUpdate(
+      {
+        callback_query: {
+          id: `cb-owned-${index}`,
+          from: { id: 7, is_bot: false },
+          data,
+          message: {
+            message_id: 14 + index,
+            chat: { id: 100, type: "private" },
+            from: { id: 7, is_bot: false },
+          },
+        },
+      },
+      { cwd: "/repo" },
+    );
+  }
+  assert.equal(events.includes("user:[callback] vividfish:approve:123"), true);
+  assert.equal(events.includes("answer:cb-custom"), true);
+  for (const data of ownedCallbackData) {
+    assert.equal(
+      events.some((event) => event === `user:[callback] ${data}`),
+      false,
+    );
+  }
 });
