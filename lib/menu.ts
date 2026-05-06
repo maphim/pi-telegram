@@ -481,7 +481,7 @@ export async function handleTelegramMenuCallbackRuntime<
             deps.updateStatus(ctx);
           },
           getCurrentThinkingLevel: deps.getThinkingLevel,
-          updateStatusMessage: () => deps.updateStatusMessage(state, ctx),
+          updateThinkingMenuMessage: () => deps.updateThinkingMenuMessage(state, ctx),
           answerCallbackQuery: deps.answerCallbackQuery,
         },
       ),

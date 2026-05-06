@@ -783,10 +783,10 @@ test("Menu runtime routes stored callback queries through callback action ports"
         events.push("unexpected:model-menu");
       },
       updateThinkingMenuMessage: async () => {
-        events.push("unexpected:thinking-menu");
+        events.push("thinking-menu");
       },
       updateStatusMessage: async () => {
-        events.push("status-menu");
+        events.push("unexpected:status-menu");
       },
       answerCallbackQuery: async (_id, text) => {
         events.push(`answer:${text ?? ""}`);
@@ -853,7 +853,7 @@ test("Menu runtime routes stored callback queries through callback action ports"
     "answer:",
     "thinking:high",
     "status",
-    "status-menu",
+    "thinking-menu",
     "answer:Thinking: high",
     "set-model:gpt-5",
     "current:gpt-5",
@@ -1148,8 +1148,8 @@ test("Menu helpers handle status and thinking callback actions", async () => {
           events.push(`set:${level}`);
         },
         getCurrentThinkingLevel: () => "high",
-        updateStatusMessage: async () => {
-          events.push("status:update");
+        updateThinkingMenuMessage: async () => {
+          events.push("thinking:update");
         },
         answerCallbackQuery: async (_id, text) => {
           events.push(`answer:${text ?? ""}`);
@@ -1180,7 +1180,7 @@ test("Menu helpers handle status and thinking callback actions", async () => {
   assert.equal(events[0], "menu:model");
   assert.equal(events[1], "answer:");
   assert.equal(events[2], "set:high");
-  assert.equal(events[3], "status:update");
+  assert.equal(events[3], "thinking:update");
   assert.equal(events[4], "answer:Thinking: high");
   assert.equal(events[5], "answer:This model has no reasoning controls.");
 });
