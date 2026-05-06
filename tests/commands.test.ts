@@ -1013,6 +1013,12 @@ test("Command helpers execute command actions through provided handlers", async 
     handleQueue: async () => {
       events.push("queue");
     },
+    handleRestart: async () => {
+      events.push("restart");
+    },
+    handleSettings: async () => {
+      events.push("settings");
+    },
   };
   assert.equal(
     await executeTelegramCommandAction(

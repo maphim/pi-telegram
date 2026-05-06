@@ -30,6 +30,7 @@ import * as Routing from "./lib/routing.ts";
 import * as Runtime from "./lib/runtime.ts";
 import * as Setup from "./lib/setup.ts";
 import * as Status from "./lib/status.ts";
+import * as ThinkingIndicator from "./lib/thinking-indicator.ts";
 import * as TextGroups from "./lib/text-groups.ts";
 
 type ActivePiModel = NonNullable<Pi.ExtensionContext["model"]>;
@@ -146,6 +147,7 @@ export default function (pi: Pi.ExtensionAPI) {
     sendMessage,
     downloadFile: downloadTelegramBridgeFile,
     editMessageText: editTelegramMessageText,
+    deleteMessage,
     answerCallbackQuery,
     prepareTempDir,
   } = Api.createDefaultTelegramBridgeApiRuntime({
@@ -213,6 +215,14 @@ export default function (pi: Pi.ExtensionAPI) {
     canSend: lockOwnershipGuard.ownsCurrentProcess,
     ...replyTransport,
   });
+  // --- Thinking Indicator ---
+  const thinkingIndicatorDeps: ThinkingIndicator.TelegramThinkingIndicatorDeps = {
+    sendMessage: (chatId, text) => sendMessage({ chat_id: chatId, text, parse_mode: "HTML" }).then(r => r ?? undefined),
+    editMessageText: (chatId, messageId, text) => editTelegramMessageText({ chat_id: chatId, message_id: messageId, text, parse_mode: "HTML" }),
+    deleteMessage: (chatId, messageId) => deleteMessage!(chatId, messageId),
+  };
+  let thinkingIndicatorState: ThinkingIndicator.TelegramThinkingIndicatorState | undefined;
+
   const { finalizeMarkdownPreview } =
     OutboundHandlers.createTelegramOutboundTextPreviewRuntime({
       finalizeMarkdownPreview: previewRuntime.finalizeMarkdown,
@@ -475,6 +485,9 @@ export default function (pi: Pi.ExtensionAPI) {
     setActiveTurn: activeTurnRuntime.set,
     createPreviewState: previewRuntime.resetState,
     startTypingLoop: promptDispatchRuntime.startTypingLoop,
+    startThinkingIndicator: (_ctx, chatId) => {
+      thinkingIndicatorState = ThinkingIndicator.startTelegramThinkingIndicator(chatId, thinkingIndicatorDeps);
+    },
     updateStatus,
     getActiveTurn: activeTurnRuntime.get,
     extractAssistant: Replies.extractLatestAssistantMessageText,
@@ -495,6 +508,10 @@ export default function (pi: Pi.ExtensionAPI) {
     isCurrentOwner: lockOwnershipGuard.ownsContext,
     getDefaultChatId: proactivePushChatIdGetter,
     isProactivePushEnabled,
+    stopThinkingIndicator: (_ctx, finalText) => {
+      ThinkingIndicator.stopTelegramThinkingIndicator(thinkingIndicatorState, finalText, thinkingIndicatorDeps);
+      thinkingIndicatorState = undefined;
+    },
     recordRuntimeEvent,
     getActiveToolExecutions: lifecycle.getActiveToolExecutions,
     setActiveToolExecutions: lifecycle.setActiveToolExecutions,

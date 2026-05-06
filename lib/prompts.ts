@@ -59,7 +59,7 @@ export function createTelegramBeforeAgentStartHook(
 }
 
 export interface TelegramProactivePromptHookDeps<TContext> {
-  baseHook?: (event: BeforeAgentStartEvent) => { systemPrompt: string };
+  baseHook?: (event: BeforeAgentStartEvent) => { systemPrompt: string } | Promise<{ systemPrompt: string }>;
   isProactivePushEnabled: () => boolean;
   isCurrentOwner: (ctx: TContext) => boolean;
 }
@@ -72,7 +72,7 @@ export function createTelegramProactiveBeforeAgentStartHook<TContext>(
 ) => Promise<{ systemPrompt: string }> {
   const baseHook = deps.baseHook ?? createTelegramBeforeAgentStartHook();
   return async function onBeforeAgentStart(event, ctx) {
-    const result = baseHook(event);
+    const result = await baseHook(event);
     if (!deps.isProactivePushEnabled()) return result;
     if (!deps.isCurrentOwner(ctx)) return result;
     return result;

@@ -24,6 +24,10 @@ export interface TelegramBridgeRuntimeState
   extends TelegramRuntimeQueueCounters, TelegramRuntimeLifecycleFlags {
   abortHandler?: () => void;
   typingInterval?: ReturnType<typeof setInterval>;
+  thinkingIndicatorMessageId?: number;
+  thinkingIndicatorChatId?: number;
+  thinkingIndicatorStartTime?: number;
+  thinkingIndicatorInterval?: ReturnType<typeof setInterval>;
 }
 
 export interface TelegramRuntimeQueuePort {
