@@ -1095,12 +1095,15 @@ async function handleTelegramCommandRuntime<
         } catch {}
         try { fs.writeFileSync("/tmp/pi-force-new-session", "1", "utf-8"); } catch {}
         try { fs.writeFileSync("/tmp/pi-telegram-restart-marker", costStr, "utf-8"); } catch {}
-        // Fire-and-forget: send message with 3s timeout, then exit
-        Promise.race([
-          sendToRestart(`🔄 Restarting pi-telegram...\n\n📊 Previous session cost: ${costStr}\n✅ Fresh session starting - cost reset to $0.0000`),
-          new Promise(r => setTimeout(r, 3000))
-        ]).catch(() => {});
-        setTimeout(() => process.exit(0), 500);
+        // Send message, wait for response, then exit
+        Promise.resolve(sendToRestart(`🔄 Restarting pi-telegram...\n\n📊 Previous session cost: ${costStr}\n✅ Fresh session starting - cost reset to $0.0000`))
+          .catch(() => {})
+          .finally(() => {
+            // Exit after message attempt completes or 5s timeout
+            setTimeout(() => process.exit(0), 5000);
+          });
+        // Safety net: force exit after 8s in case message hangs
+        setTimeout(() => process.exit(0), 8000);
       },
       handleThinking: async (nextMessage, commandCtx) => {
         await deps.openThinkingMenu(nextMessage, commandCtx);
