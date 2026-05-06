@@ -524,6 +524,30 @@ export default function (pi: Pi.ExtensionAPI) {
   const agentStartWithDedupReset = Lifecycle.createAgentStartDedupHook(
     agentLifecycleHooks.onAgentStart,
   );
+  // Wrap tool execution hooks to update thinking indicator with tool name
+  const thinkingAwareToolExecStart = async (
+    event: unknown,
+    _ctx: unknown,
+  ): Promise<void> => {
+    const evt = event as { toolName?: string };
+    if (thinkingIndicatorState && evt?.toolName) {
+      ThinkingIndicator.updateTelegramThinkingIndicatorLabel(
+        thinkingIndicatorState,
+        String(evt.toolName),
+        thinkingIndicatorDeps,
+      );
+    }
+    agentLifecycleHooks.onToolExecutionStart?.();
+  };
+  const thinkingAwareToolExecEnd = async (
+    _event: unknown,
+    _ctx: unknown,
+  ): Promise<void> => {
+    agentLifecycleHooks.onToolExecutionEnd?.({} as never, undefined as never);
+    if (thinkingIndicatorState) {
+      thinkingIndicatorState.currentLabel = 'Reasoning';
+    }
+  };
   // Wrap onMessageStart to adopt thinking indicator message as the preview target
   const lifetimeOnMessageStart = previewRuntime.onMessageStart;
   const thinkingAwareOnMessageStart = async (
@@ -539,6 +563,7 @@ export default function (pi: Pi.ExtensionAPI) {
         pState.messageId = thinkingIndicatorState.messageId;
         pState.mode = 'message';
         thinkingAdoptedPreview = true;
+        ThinkingIndicator.updateTelegramThinkingIndicatorLabel(thinkingIndicatorState, 'Writing', thinkingIndicatorDeps);
       }
     }
   };
@@ -546,6 +571,8 @@ export default function (pi: Pi.ExtensionAPI) {
   Lifecycle.registerTelegramLifecycleHooks(pi, {
     ...sessionLifecycleRuntime,
     ...agentLifecycleHooks,
+    onToolExecutionStart: thinkingAwareToolExecStart,
+    onToolExecutionEnd: thinkingAwareToolExecEnd,
     onAgentStart: agentStartWithDedupReset,
     onBeforeAgentStart: Prompts.createTelegramProactiveBeforeAgentStartHook({
       isProactivePushEnabled,
