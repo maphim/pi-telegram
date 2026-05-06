@@ -4,11 +4,13 @@
  * Owns sending, updating, and cleaning up a "🧠 Processing…" message
  * that shows elapsed time while the LLM is thinking.
  *
- * Flow:
- *   Agent start → send "🧠 Processing… (0s)", update every 5s
- *   Agent end   → delete the indicator (response delivered through normal channels)
- *   Preview start → delete the indicator (preview takes over)
- *   Error       → delete the indicator
+ * Hybrid flow:
+ *   1. Agent start   → send "🧠 Processing… (0s)", update every 5s
+ *   2. LLM reasoning → elapsed timer keeps running
+ *   3. Preview start → inject thinking messageId into preview state →
+ *                      preview EDITS the same message instead of sending new
+ *   4. Agent end     → thinking message IS the response — no delete needed
+ *   5. Fallback      → if no preview, delete indicator
  */
 
 const THINKING_INTERVAL_MS = 5000;
@@ -31,11 +33,12 @@ export interface TelegramThinkingIndicatorState {
   chatId: number;
   startTime: number;
   interval?: ReturnType<typeof setInterval>;
+  /** Resolves once the initial message has been sent and messageId is set. */
+  ready: Promise<void>;
 }
 
 let INDICATOR_ENABLED = true;
 
-/** Enable or disable the thinking indicator globally. */
 export function setTelegramThinkingIndicatorEnabled(enabled: boolean): void {
   INDICATOR_ENABLED = enabled;
 }
@@ -46,8 +49,11 @@ export function isTelegramThinkingIndicatorEnabled(): boolean {
 
 /**
  * Send the initial "🧠 Processing…" thinking indicator and start
- * the periodic elapsed-time update loop. Returns a state object
- * that must be passed to stopTelegramThinkingIndicator for cleanup.
+ * the periodic elapsed-time update loop.
+ *
+ * The returned state includes a `.ready` promise that resolves once
+ * the message has been sent and `messageId` is populated. The preview
+ * system can await `.ready` and then use `messageId` as its target.
  */
 export function startTelegramThinkingIndicator(
   chatId: number,
@@ -55,14 +61,20 @@ export function startTelegramThinkingIndicator(
 ): TelegramThinkingIndicatorState | undefined {
   if (!INDICATOR_ENABLED) return undefined;
   const text = buildThinkingIndicatorText(0);
+  let resolveReady: () => void;
   const state: TelegramThinkingIndicatorState = {
     messageId: 0,
     chatId,
     startTime: Date.now(),
+    ready: new Promise((r) => {
+      resolveReady = r;
+    }),
   };
-  // Fire-and-forget — the promise resolves asynchronously
   deps.sendMessage(chatId, text).then((sent) => {
-    if (!sent) return;
+    if (!sent) {
+      resolveReady!();
+      return;
+    }
     state.messageId = sent.message_id;
     state.interval = setInterval(() => {
       const elapsed = Math.floor((Date.now() - state.startTime) / 1000);
@@ -72,30 +84,34 @@ export function startTelegramThinkingIndicator(
         buildThinkingIndicatorText(elapsed),
       );
     }, THINKING_INTERVAL_MS);
+    resolveReady!();
   });
   return state;
 }
 
 /**
- * Stop the update interval and delete the thinking indicator message.
- * Safe to call multiple times. The actual response is delivered
- * through the normal preview/outbound channels.
+ * Stop the update interval and clean up the thinking indicator.
+ *
+ * @param keepMessage  If true, leave the message in place (it was adopted
+ *                     by the preview/outbound system as the response).
+ *                     Default: false (delete the indicator).
  */
 export async function stopTelegramThinkingIndicator(
   state: TelegramThinkingIndicatorState | undefined,
   deps?: TelegramThinkingIndicatorDeps,
+  keepMessage?: boolean,
 ): Promise<void> {
   if (!state) return;
   if (state.interval) {
     clearInterval(state.interval);
     state.interval = undefined;
   }
-  // Delete the indicator message (best-effort)
+  if (keepMessage) return; // preview adopted it — message IS the response
   if (deps && state.messageId) {
     try {
       await deps.deleteMessage(state.chatId, state.messageId);
     } catch {
-      // best-effort — message may already be deleted
+      // best-effort
     }
   }
 }

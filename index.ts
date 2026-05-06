@@ -222,6 +222,7 @@ export default function (pi: Pi.ExtensionAPI) {
     deleteMessage: (chatId, messageId) => deleteMessage!(chatId, messageId),
   };
   let thinkingIndicatorState: ThinkingIndicator.TelegramThinkingIndicatorState | undefined;
+  let thinkingAdoptedPreview = false;
 
   const { finalizeMarkdownPreview } =
     OutboundHandlers.createTelegramOutboundTextPreviewRuntime({
@@ -509,8 +510,9 @@ export default function (pi: Pi.ExtensionAPI) {
     getDefaultChatId: proactivePushChatIdGetter,
     isProactivePushEnabled,
     stopThinkingIndicator: (_ctx, _finalText) => {
-      ThinkingIndicator.stopTelegramThinkingIndicator(thinkingIndicatorState, thinkingIndicatorDeps);
+      ThinkingIndicator.stopTelegramThinkingIndicator(thinkingIndicatorState, thinkingIndicatorDeps, thinkingAdoptedPreview);
       thinkingIndicatorState = undefined;
+      thinkingAdoptedPreview = false;
     },
     recordRuntimeEvent,
     getActiveToolExecutions: lifecycle.getActiveToolExecutions,
@@ -522,6 +524,25 @@ export default function (pi: Pi.ExtensionAPI) {
   const agentStartWithDedupReset = Lifecycle.createAgentStartDedupHook(
     agentLifecycleHooks.onAgentStart,
   );
+  // Wrap onMessageStart to adopt thinking indicator message as the preview target
+  const lifetimeOnMessageStart = previewRuntime.onMessageStart;
+  const thinkingAwareOnMessageStart = async (
+    event: Preview.TelegramAssistantMessagePreviewHookEvent<unknown>,
+  ): Promise<void> => {
+    await lifetimeOnMessageStart(event);
+    // After preview created its state, inject thinking indicator messageId
+    // so the preview system EDITS that message instead of sending a new one.
+    if (thinkingIndicatorState) {
+      await thinkingIndicatorState.ready;
+      const pState = previewRuntime.getState();
+      if (pState && thinkingIndicatorState.messageId) {
+        pState.messageId = thinkingIndicatorState.messageId;
+        pState.mode = 'message';
+        thinkingAdoptedPreview = true;
+      }
+    }
+  };
+
   Lifecycle.registerTelegramLifecycleHooks(pi, {
     ...sessionLifecycleRuntime,
     ...agentLifecycleHooks,
@@ -531,7 +552,7 @@ export default function (pi: Pi.ExtensionAPI) {
       isCurrentOwner: lockOwnershipGuard.ownsContext,
     }),
     onModelSelect: currentModelRuntime.onModelSelect,
-    onMessageStart: previewRuntime.onMessageStart,
+    onMessageStart: thinkingAwareOnMessageStart,
     onMessageUpdate: previewRuntime.onMessageUpdate,
   });
 }
