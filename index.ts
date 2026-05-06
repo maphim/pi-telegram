@@ -508,8 +508,8 @@ export default function (pi: Pi.ExtensionAPI) {
     isCurrentOwner: lockOwnershipGuard.ownsContext,
     getDefaultChatId: proactivePushChatIdGetter,
     isProactivePushEnabled,
-    stopThinkingIndicator: (_ctx, finalText) => {
-      ThinkingIndicator.stopTelegramThinkingIndicator(thinkingIndicatorState, finalText, thinkingIndicatorDeps);
+    stopThinkingIndicator: (_ctx, _finalText) => {
+      ThinkingIndicator.stopTelegramThinkingIndicator(thinkingIndicatorState, thinkingIndicatorDeps);
       thinkingIndicatorState = undefined;
     },
     recordRuntimeEvent,

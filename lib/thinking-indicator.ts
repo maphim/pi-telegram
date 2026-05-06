@@ -3,6 +3,12 @@
  * Zones: telegram ui, progress indication, reasoning feedback
  * Owns sending, updating, and cleaning up a "🧠 Processing…" message
  * that shows elapsed time while the LLM is thinking.
+ *
+ * Flow:
+ *   Agent start → send "🧠 Processing… (0s)", update every 5s
+ *   Agent end   → delete the indicator (response delivered through normal channels)
+ *   Preview start → delete the indicator (preview takes over)
+ *   Error       → delete the indicator
  */
 
 const THINKING_INTERVAL_MS = 5000;
@@ -27,21 +33,34 @@ export interface TelegramThinkingIndicatorState {
   interval?: ReturnType<typeof setInterval>;
 }
 
+let INDICATOR_ENABLED = true;
+
+/** Enable or disable the thinking indicator globally. */
+export function setTelegramThinkingIndicatorEnabled(enabled: boolean): void {
+  INDICATOR_ENABLED = enabled;
+}
+
+export function isTelegramThinkingIndicatorEnabled(): boolean {
+  return INDICATOR_ENABLED;
+}
+
 /**
  * Send the initial "🧠 Processing…" thinking indicator and start
- * the periodic elapsed-time update loop.
+ * the periodic elapsed-time update loop. Returns a state object
+ * that must be passed to stopTelegramThinkingIndicator for cleanup.
  */
 export function startTelegramThinkingIndicator(
   chatId: number,
   deps: TelegramThinkingIndicatorDeps,
 ): TelegramThinkingIndicatorState | undefined {
+  if (!INDICATOR_ENABLED) return undefined;
   const text = buildThinkingIndicatorText(0);
-  // Fire-and-forget send — returns a controller that wraps the eventual messageId
   const state: TelegramThinkingIndicatorState = {
     messageId: 0,
     chatId,
     startTime: Date.now(),
   };
+  // Fire-and-forget — the promise resolves asynchronously
   deps.sendMessage(chatId, text).then((sent) => {
     if (!sent) return;
     state.messageId = sent.message_id;
@@ -59,11 +78,11 @@ export function startTelegramThinkingIndicator(
 
 /**
  * Stop the update interval and delete the thinking indicator message.
- * Call when the actual response is about to appear.
+ * Safe to call multiple times. The actual response is delivered
+ * through the normal preview/outbound channels.
  */
 export async function stopTelegramThinkingIndicator(
   state: TelegramThinkingIndicatorState | undefined,
-  finalText?: string,
   deps?: TelegramThinkingIndicatorDeps,
 ): Promise<void> {
   if (!state) return;
@@ -71,21 +90,12 @@ export async function stopTelegramThinkingIndicator(
     clearInterval(state.interval);
     state.interval = undefined;
   }
-  // If we have a final text and deps, edit the thinking message with the result
-  if (finalText && deps && state.messageId) {
-    try {
-      await deps.editMessageText(state.chatId, state.messageId, finalText);
-      return; // successfully replaced
-    } catch {
-      // fall through to delete
-    }
-  }
-  // Otherwise delete the indicator
+  // Delete the indicator message (best-effort)
   if (deps && state.messageId) {
     try {
       await deps.deleteMessage(state.chatId, state.messageId);
     } catch {
-      // best-effort cleanup
+      // best-effort — message may already be deleted
     }
   }
 }
