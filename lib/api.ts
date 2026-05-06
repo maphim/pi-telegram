@@ -274,6 +274,10 @@ export interface TelegramBridgeApiRuntime {
   editMessageText: (
     body: TelegramEditMessageTextBody,
   ) => Promise<"edited" | "unchanged">;
+  deleteMessage: (
+    chatId: number,
+    messageId: number,
+  ) => Promise<boolean>;
   answerCallbackQuery: (
     callbackQueryId: string,
     text?: string,
@@ -745,6 +749,11 @@ export function createTelegramBridgeApiRuntime(
         throw error;
       }
     },
+    deleteMessage: (chatId, messageId) =>
+      callRecorded<boolean>("deleteMessage", {
+        chat_id: chatId,
+        message_id: messageId,
+      }),
     answerCallbackQuery: (callbackQueryId, text) => {
       return deps.client.answerCallbackQuery(callbackQueryId, text);
     },

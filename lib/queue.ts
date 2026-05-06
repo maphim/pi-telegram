@@ -515,6 +515,7 @@ export interface TelegramAgentStartRuntimeDeps<
   createPreviewState: () => void;
   startTypingLoop: () => void;
   updateStatus: () => void;
+  startThinkingIndicator?: (chatId: number) => void;
 }
 
 export interface TelegramAgentStartHookRuntimeDeps<
@@ -532,6 +533,7 @@ export interface TelegramAgentStartHookRuntimeDeps<
   setActiveTurn: (turn: TTurn) => void;
   createPreviewState: () => void;
   startTypingLoop: (ctx: TContext) => void;
+  startThinkingIndicator?: (ctx: TContext, chatId: number) => void;
   updateStatus: (ctx: TContext) => void;
 }
 
@@ -599,6 +601,7 @@ export function handleTelegramAgentStartRuntime<
     deps.setActiveTurn(startPlan.activeTurn as TTurn);
     deps.createPreviewState();
     deps.startTypingLoop();
+    deps.startThinkingIndicator?.(startPlan.activeTurn.chatId);
   }
   deps.updateStatus();
 }
@@ -623,6 +626,7 @@ export function createTelegramAgentStartHook<
       setActiveTurn: deps.setActiveTurn,
       createPreviewState: deps.createPreviewState,
       startTypingLoop: () => deps.startTypingLoop(ctx),
+      startThinkingIndicator: deps.startThinkingIndicator ? (chatId) => deps.startThinkingIndicator!(ctx, chatId) : undefined,
       updateStatus: () => deps.updateStatus(ctx),
     });
   };
@@ -795,6 +799,7 @@ export interface TelegramAgentEndRuntimeDeps<
   ) => Promise<void>;
   getDefaultChatId?: () => number | undefined;
   isProactivePushEnabled?: () => boolean;
+  stopThinkingIndicator?: (finalText?: string) => void;
   recordRuntimeEvent?: (
     category: string,
     error: unknown,
@@ -816,6 +821,7 @@ export interface TelegramAgentEndHookRuntimeDeps<
   resetRuntimeState: () => void;
   updateStatus: (ctx: TContext) => void;
   isCurrentOwner?: (ctx: TContext) => boolean;
+  stopThinkingIndicator?: (ctx: TContext, finalText?: string) => void;
   dispatchNextQueuedTelegramTurn: (ctx: TContext) => void;
   requestDeferredDispatchNextQueuedTelegramTurn: (
     dispatch: (ctx: TContext) => void,
@@ -956,6 +962,7 @@ export function createTelegramAgentEndHook<
       sendOutboundReplyArtifacts: deps.sendOutboundReplyArtifacts,
       getDefaultChatId: deps.getDefaultChatId,
       isProactivePushEnabled: deps.isProactivePushEnabled,
+      stopThinkingIndicator: deps.stopThinkingIndicator ? (finalText) => deps.stopThinkingIndicator!(ctx, finalText) : undefined,
       recordRuntimeEvent: deps.recordRuntimeEvent,
     });
   };
@@ -974,6 +981,7 @@ export async function handleTelegramAgentEndRuntime<
   const hasOutboundArtifacts =
     !!outboundReply?.voiceText || !!outboundReply?.voiceReplies?.length;
   const replyMarkup = outboundReply?.replyMarkup;
+  deps.stopThinkingIndicator?.(finalText ?? (assistant.errorMessage ? undefined : undefined));
   deps.resetRuntimeState();
   deps.updateStatus();
   if (deps.isCurrentOwner && !deps.isCurrentOwner()) {
