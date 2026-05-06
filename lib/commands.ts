@@ -1093,11 +1093,9 @@ async function handleTelegramCommandRuntime<
         try { fs.writeFileSync("/tmp/pi-force-new-session", "1", "utf-8"); } catch {}
         try { fs.writeFileSync("/tmp/pi-telegram-restart-marker", costStr, "utf-8"); } catch {}
         await sendToRestart(`🔄 Restarting pi-telegram...\n\n📊 Previous session cost: ${costStr}\n✅ Fresh session starting - cost reset to $0.0000`);
-        setTimeout(() => {
-          try {
-            execSync("systemctl --user restart pi-telegram", { timeout: 5000 });
-          } catch {}
-        }, 1000);
+        // exit cleanly — systemd Restart=always handles restart
+        // /tmp/pi-force-new-session signals fresh start to new wrapper
+        setTimeout(() => process.exit(0), 500);
       },
       handleThinking: async (nextMessage, commandCtx) => {
         await deps.openThinkingMenu(nextMessage, commandCtx);
