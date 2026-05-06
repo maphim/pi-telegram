@@ -839,6 +839,9 @@ export async function executeTelegramCommandAction<TMessage, TContext>(
     case "help":
       await deps.handleHelp(message, action.commandName, ctx);
       return true;
+    case "restart":
+      await deps.handleRestart(message, ctx);
+      return true;
   }
 }
 
@@ -1092,10 +1095,12 @@ async function handleTelegramCommandRuntime<
         } catch {}
         try { fs.writeFileSync("/tmp/pi-force-new-session", "1", "utf-8"); } catch {}
         try { fs.writeFileSync("/tmp/pi-telegram-restart-marker", costStr, "utf-8"); } catch {}
-        const msg = await sendToRestart(`🔄 Restarting pi-telegram...\n\n📊 Previous session cost: ${costStr}\n✅ Fresh session starting - cost reset to $0.0000`);
-        // Wait for Telegram to deliver before exit
-        await new Promise(r => setTimeout(r, 2000));
-        process.exit(0);
+        // Fire-and-forget: send message with 3s timeout, then exit
+        Promise.race([
+          sendToRestart(`🔄 Restarting pi-telegram...\n\n📊 Previous session cost: ${costStr}\n✅ Fresh session starting - cost reset to $0.0000`),
+          new Promise(r => setTimeout(r, 3000))
+        ]).catch(() => {});
+        setTimeout(() => process.exit(0), 500);
       },
       handleThinking: async (nextMessage, commandCtx) => {
         await deps.openThinkingMenu(nextMessage, commandCtx);
