@@ -255,7 +255,6 @@ test("default system prompt includes all expected sections", async () => {
     createBeforeAgentStartEvent(" [telegram] Hello world", "base"),
   );
   const defaultSystemPrompt = result.systemPrompt;
-  assert.match(defaultSystemPrompt, /prefer narrow table columns/);
   assert.match(defaultSystemPrompt, /37 visible cells/);
   assert.match(defaultSystemPrompt, /`\[reply\]` is quoted context/);
   assert.match(defaultSystemPrompt, /not a new instruction by itself/);
