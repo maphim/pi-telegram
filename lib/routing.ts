@@ -4,21 +4,18 @@
  * Wires authorized updates into menus, commands, media grouping, and prompt queueing
  */
 
-import { readFile } from "node:fs/promises";
+import * as OutboundHandlers from "./outbound-handlers.ts";
 import * as Commands from "./commands.ts";
 import type { TelegramConfigStore } from "./config.ts";
-import type { TelegramSectionRegistry } from "./extension-sections.ts";
 import type { TelegramInboundHandlerRuntime } from "./inbound-handlers.ts";
 import * as Media from "./media.ts";
 import * as Menu from "./menu.ts";
 import * as Model from "./model.ts";
-import * as OutboundHandlers from "./outbound-handlers.ts";
-import * as PromptTemplates from "./prompt-templates.ts";
 import * as Queue from "./queue.ts";
+import * as PromptTemplates from "./prompt-templates.ts";
 import type { TelegramBridgeRuntime } from "./runtime.ts";
 import * as TextGroups from "./text-groups.ts";
 import * as Turns from "./turns.ts";
-import type { TelegramUser } from "./updates.ts";
 import * as Updates from "./updates.ts";
 
 export type TelegramRoutedMessage = Updates.TelegramUpdateMessage &
@@ -42,7 +39,7 @@ export interface TelegramInboundRouteRuntimeDeps<
   >;
   bridgeRuntime: TelegramBridgeRuntime;
   activeTurnRuntime: Queue.TelegramActiveTurnStore;
-  mediaGroupRuntime: Media.TelegramMediaGroupController<TMessage, TContext>;
+  mediaGroupRuntime: Media.TelegramMediaGroupController<TMessage>;
   textGroupRuntime: TextGroups.TelegramTextGroupController<TMessage, TContext>;
   telegramQueueStore: Queue.TelegramQueueStateStore<TContext>;
   queueMutationRuntime: Queue.TelegramQueueMutationController<TContext>;
@@ -53,24 +50,11 @@ export interface TelegramInboundRouteRuntimeDeps<
     Model.ScopedTelegramModel<TModel>
   >;
   menuActions: Menu.TelegramMenuActionRuntime<TContext, TModel>;
-  updateSettingsMenuMessage?: (
-    state: Menu.TelegramModelMenuState<TModel>,
-    ctx: TContext,
-  ) => Promise<void>;
   openQueueMenu: (
     chatId: number,
     replyToMessageId: number,
     ctx: TContext,
   ) => Promise<void>;
-  openSettingsMenu?: (
-    chatId: number,
-    replyToMessageId: number,
-    ctx: TContext,
-  ) => Promise<void>;
-  settingsMenuCallbackHandler?: (
-    query: TCallbackQuery,
-    ctx: TContext,
-  ) => Promise<boolean>;
   queueMenuCallbackHandler: (
     query: TCallbackQuery,
     ctx: TContext,
@@ -79,30 +63,10 @@ export interface TelegramInboundRouteRuntimeDeps<
   inboundHandlerRuntime: TelegramInboundHandlerRuntime<TContext>;
   updateStatus: (ctx: TContext, error?: string) => void;
   dispatchNextQueuedTelegramTurn: (ctx: TContext) => void;
-  requestDeferredDispatchNextQueuedTelegramTurn?: (
-    dispatch: (ctx: TContext) => void,
-  ) => void;
-  startTypingLoop?: (ctx: TContext, chatId?: number) => void;
-  stopTypingLoop?: () => void;
   answerCallbackQuery: (
     callbackQueryId: string,
     text?: string,
   ) => Promise<void>;
-  editInteractiveMessage?: (
-    chatId: number,
-    messageId: number,
-    text: string,
-    mode: "html" | "plain",
-    replyMarkup: Menu.TelegramReplyMarkup,
-  ) => Promise<void>;
-  sendInteractiveMessage?: (
-    chatId: number,
-    text: string,
-    mode: "html" | "plain",
-    replyMarkup: Menu.TelegramReplyMarkup,
-  ) => Promise<number | undefined>;
-  deleteMessage?: (chatId: number, messageId: number) => Promise<void>;
-  answerGuestQuery: (guestQueryId: string, text?: string) => Promise<void>;
   sendTextReply: (
     chatId: number,
     replyToMessageId: number,
@@ -115,10 +79,6 @@ export interface TelegramInboundRouteRuntimeDeps<
   downloadFile: Media.DownloadTelegramMessageFilesDeps["downloadFile"];
   getThinkingLevel: () => Model.ThinkingLevel;
   setThinkingLevel: (level: Model.ThinkingLevel) => void;
-  persistScopedModelPatterns?: (
-    patterns: string[],
-    ctx: TContext,
-  ) => Promise<void>;
   setModel: (model: TModel) => Promise<boolean>;
   sendUserMessage?: (message: string) => void;
   isIdle: (ctx: TContext) => boolean;
@@ -132,15 +92,12 @@ export interface TelegramInboundRouteRuntimeDeps<
     error: unknown,
     details?: Record<string, unknown>,
   ) => void;
-  sectionRegistry?: TelegramSectionRegistry;
 }
 
 const TELEGRAM_OWNED_CALLBACK_PREFIXES = [
   "menu:",
   "model:",
   "queue:",
-  "section:",
-  "settings:",
   "status:",
   "tgbtn:",
   "thinking:",
@@ -183,49 +140,17 @@ export function createTelegramInboundRouteRuntime<
     updateModelMenuMessage: deps.menuActions.updateModelMenuMessage,
     updateThinkingMenuMessage: deps.menuActions.updateThinkingMenuMessage,
     updateStatusMessage: deps.menuActions.updateStatusMessage,
-    updateSettingsMenuMessage: deps.updateSettingsMenuMessage,
     answerCallbackQuery: deps.answerCallbackQuery,
     isIdle: deps.isIdle,
     hasActiveTelegramTurn: deps.activeTurnRuntime.has,
     hasAbortHandler: deps.bridgeRuntime.abort.hasHandler,
     getActiveToolExecutions:
       deps.bridgeRuntime.lifecycle.getActiveToolExecutions,
-    persistScopedModelPatterns: deps.persistScopedModelPatterns,
     setModel: deps.setModel,
     setCurrentModel: deps.currentModelRuntime.setCurrentModel,
     stagePendingModelSwitch: deps.modelSwitchController.stagePendingSwitch,
     restartInterruptedTelegramTurn:
       deps.modelSwitchController.restartInterruptedTurn,
-    sectionRegistry: deps.sectionRegistry,
-    editInteractiveMessage: deps.editInteractiveMessage,
-    sendInteractiveMessage: deps.sendInteractiveMessage,
-    deleteMessage: deps.deleteMessage,
-    enqueueSectionPrompt: async (prompt: string, ctx: TContext) => {
-      const chatId = deps.configStore.getAllowedUserId();
-      if (typeof chatId !== "number") return;
-      const order = deps.bridgeRuntime.queue.allocateItemOrder();
-      const turn: Queue.PendingTelegramTurn = {
-        kind: "prompt",
-        chatId,
-        replyToMessageId: 0,
-        sourceMessageIds: [],
-        queueOrder: order,
-        queueLane: "default",
-        laneOrder: order,
-        queuedAttachments: [],
-        content: [
-          {
-            type: "text",
-            text: `[telegram] ${prompt}`,
-          },
-        ],
-        historyText: Turns.truncateTelegramQueueSummary(prompt),
-        statusSummary: Turns.truncateTelegramQueueSummary(prompt),
-      };
-      deps.queueMutationRuntime.append(turn, ctx);
-      deps.updateStatus(ctx);
-      deps.dispatchNextQueuedTelegramTurn(ctx);
-    },
   });
   const callbackHandler = async (
     query: TCallbackQuery,
@@ -262,11 +187,6 @@ export function createTelegramInboundRouteRuntime<
     }
     const handledByQueue = await deps.queueMenuCallbackHandler(query, ctx);
     if (handledByQueue) return;
-    const handledBySettings = await deps.settingsMenuCallbackHandler?.(
-      query,
-      ctx,
-    );
-    if (handledBySettings) return;
     const callbackData = query.data;
     if (
       deps.sendUserMessage &&
@@ -344,10 +264,6 @@ export function createTelegramInboundRouteRuntime<
       deps.bridgeRuntime.lifecycle.setCompactionInProgress,
     updateStatus: deps.updateStatus,
     dispatchNextQueuedTelegramTurn: deps.dispatchNextQueuedTelegramTurn,
-    requestDeferredDispatchNextQueuedTelegramTurn:
-      deps.requestDeferredDispatchNextQueuedTelegramTurn,
-    startTypingLoop: deps.startTypingLoop,
-    stopTypingLoop: deps.stopTypingLoop,
     enqueueContinueTurn,
     compact: deps.compact,
     allocateItemOrder: deps.bridgeRuntime.queue.allocateItemOrder,
@@ -363,7 +279,6 @@ export function createTelegramInboundRouteRuntime<
       const chatId = (message as { chat: { id: number } }).chat.id;
       return deps.openQueueMenu(chatId, message.message_id, ctx);
     },
-    openSettingsMenu: deps.openSettingsMenu,
     getAllowedUserId: deps.configStore.getAllowedUserId,
     setAllowedUserId: deps.configStore.setAllowedUserId,
     setMyCommands: deps.setMyCommands,
@@ -423,105 +338,6 @@ export function createTelegramInboundRouteRuntime<
     ...deps.telegramQueueStore,
     updateStatus: deps.updateStatus,
   });
-  const handleAuthorizedTelegramGuestMessage = async (
-    guestMessage: Updates.TelegramGuestMessage & { from: TelegramUser },
-    ctx: TContext,
-  ): Promise<void> => {
-    const text = guestMessage.text ?? "";
-    const gm = guestMessage as unknown as Record<string, unknown>;
-    // Build telegram prefix with guest context
-    const fromRaw = gm.from as Record<string, unknown> | undefined;
-    const fromName =
-      (fromRaw?.username as string) || (fromRaw?.first_name as string) || "";
-    const chatRaw = gm.chat as Record<string, unknown>;
-    const chatTitle = chatRaw?.title as string | undefined;
-    const chatType = chatRaw?.type as string;
-    const prefixParts = ["telegram"];
-    if (fromName) prefixParts.push(`from:${fromName}`);
-    if (chatType !== "private" && chatTitle) {
-      prefixParts.push(`guest:${chatTitle}`);
-    }
-    const telegramPrefix = `[${prefixParts.join("|")}]`;
-    // Extract reply context
-    const replyMsg = gm.reply_to_message as Record<string, unknown> | undefined;
-    const replyText = replyMsg
-      ? ((replyMsg.text as string) || (replyMsg.caption as string) || "").trim()
-      : "";
-    const replyFrom = replyMsg
-      ? ((replyMsg.from as Record<string, unknown> | undefined)?.username as
-          | string
-          | undefined)
-      : undefined;
-    // Download files, run inbound handlers
-    const guestMsg = guestMessage as unknown as Media.TelegramMediaMessage;
-    const files = await Media.downloadTelegramMessageFiles([guestMsg], {
-      downloadFile: deps.downloadFile,
-    });
-    const processed = await deps.inboundHandlerRuntime.process(
-      files,
-      text,
-      ctx,
-    );
-    let rawText = processed.rawText || text;
-    // Append reply context after handler processing
-    if (replyText) {
-      const replyBlock = replyFrom
-        ? `[reply|from:${replyFrom}] ${replyText}`
-        : `[reply] ${replyText}`;
-      rawText = `${rawText}\n\n${replyBlock}`;
-    }
-    const promptText = Turns.buildTelegramTurnPrompt({
-      telegramPrefix,
-      rawText,
-      files,
-      promptFiles: processed.promptFiles,
-      handlerOutputs: processed.handlerOutputs,
-    });
-    const order = deps.bridgeRuntime.queue.allocateItemOrder();
-    const content: Queue.TelegramPromptContent[] = [
-      { type: "text", text: promptText },
-    ];
-    for (const file of processed.promptFiles) {
-      if (file.isImage && file.mimeType) {
-        try {
-          const buffer = await readFile(file.path);
-          content.push({
-            type: "image",
-            data: Buffer.from(buffer).toString("base64"),
-            mimeType: file.mimeType,
-          });
-        } catch {
-          // skip unreadable files
-        }
-      }
-    }
-    const guestTurn: Queue.PendingTelegramTurn = {
-      kind: "prompt",
-      chatId: 0,
-      replyToMessageId: 0,
-      guestQueryId: guestMessage.guest_query_id,
-      sourceMessageIds: [],
-      queueOrder: order,
-      queueLane: "default",
-      laneOrder: order,
-      queuedAttachments: [],
-      content,
-      historyText: Turns.formatTelegramTurnStatusSummary(
-        processed.rawText || text,
-        processed.promptFiles,
-        processed.handlerOutputs,
-      ),
-      statusSummary: Turns.truncateTelegramQueueSummary(
-        processed.rawText || text,
-      ),
-    };
-    const items = deps.telegramQueueStore.getQueuedItems();
-    deps.telegramQueueStore.setQueuedItems(
-      Queue.appendTelegramQueueItem(items, guestTurn),
-    );
-    deps.updateStatus(ctx);
-    deps.dispatchNextQueuedTelegramTurn(ctx);
-  };
   return Updates.createTelegramPairedUpdateRuntime<TContext, TUpdate>({
     getAllowedUserId: deps.configStore.getAllowedUserId,
     setAllowedUserId: deps.configStore.setAllowedUserId,
@@ -535,11 +351,9 @@ export function createTelegramInboundRouteRuntime<
     prioritizeQueuedTelegramTurnByMessageId:
       deps.queueMutationRuntime.prioritizeByMessageId,
     answerCallbackQuery: deps.answerCallbackQuery,
-    answerGuestQuery: deps.answerGuestQuery,
     handleAuthorizedTelegramCallbackQuery: callbackHandler,
     sendTextReply: deps.sendTextReply,
     handleAuthorizedTelegramMessage: textDispatch.handleMessage,
     handleAuthorizedTelegramEditedMessage: editRuntime.updateFromEditedMessage,
-    handleAuthorizedTelegramGuestMessage,
   });
 }

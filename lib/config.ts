@@ -42,7 +42,6 @@ export interface TelegramConfig {
   inboundHandlers?: TelegramInboundHandlerConfig[];
   attachmentHandlers?: TelegramInboundHandlerConfig[];
   outboundHandlers?: TelegramOutboundHandlerConfig[];
-  proactivePush?: boolean;
 }
 
 export interface TelegramConfigStore {
@@ -125,29 +124,6 @@ export function createTelegramConfigStore(
   };
 }
 
-export function createTelegramProactivePushChecker(
-  configStore: Pick<TelegramConfigStore, "get">,
-): () => boolean {
-  return () => configStore.get().proactivePush ?? false;
-}
-
-export function createTelegramProactivePushSetter(
-  configStore: Pick<TelegramConfigStore, "get" | "set" | "persist">,
-): (enabled: boolean) => Promise<void> {
-  return async (enabled) => {
-    const config = { ...configStore.get(), proactivePush: enabled };
-    configStore.set(config);
-    await configStore.persist(config);
-  };
-}
-
-export function createTelegramProactivePushChatIdGetter(deps: {
-  getActiveTurnChatId: () => number | undefined;
-  getAllowedUserId: () => number | undefined;
-}): () => number | undefined {
-  return () => deps.getActiveTurnChatId() ?? deps.getAllowedUserId();
-}
-
 export type TelegramAuthorizationState =
   | { kind: "pair"; userId: number }
   | { kind: "allow" }
@@ -185,14 +161,6 @@ export function getTelegramAuthorizationState(
   return { kind: "deny" };
 }
 
-function isTelegramStaleContextError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    (error.message.includes("stale after session") ||
-      error.message.includes("stale ctx"))
-  );
-}
-
 export async function pairTelegramUserIfNeeded<TContext>(
   userId: number,
   deps: TelegramUserPairingDeps<TContext>,
@@ -204,11 +172,7 @@ export async function pairTelegramUserIfNeeded<TContext>(
   if (authorization.kind !== "pair") return false;
   deps.setAllowedUserId(authorization.userId);
   await deps.persistConfig();
-  try {
-    deps.updateStatus(deps.ctx);
-  } catch (error) {
-    if (!isTelegramStaleContextError(error)) throw error;
-  }
+  deps.updateStatus(deps.ctx);
   return true;
 }
 

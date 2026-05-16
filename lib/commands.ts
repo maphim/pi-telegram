@@ -4,6 +4,8 @@
  * Owns Telegram slash-command normalization, bot command metadata, and pi-side command registration behind runtime ports
  */
 
+import { execSync } from "node:child_process";
+import * as fs from "node:fs";
 import { pairTelegramUserIfNeeded } from "./config.ts";
 import type { ExtensionAPI, ExtensionCommandContext } from "./pi.ts";
 import {
@@ -230,7 +232,6 @@ export const TELEGRAM_RESERVED_COMMAND_NAMES = [
   "compact",
   "model",
   "thinking",
-  "settings",
   "help",
   "start",
 ] as const;
@@ -261,8 +262,8 @@ export type TelegramCommandAction =
   | { kind: "compact"; executionMode: "immediate" }
   | { kind: "status"; executionMode: "immediate" }
   | { kind: "model"; executionMode: "immediate" }
+  | { kind: "restart"; executionMode: "immediate" }
   | { kind: "thinking"; executionMode: "immediate" }
-  | { kind: "settings"; executionMode: "immediate" }
   | {
       kind: "help";
       commandName: "help" | "start";
@@ -281,7 +282,7 @@ export interface TelegramCommandActionDeps<TMessage, TContext> {
   handleStatus: (message: TMessage, ctx: TContext) => Promise<void>;
   handleModel: (message: TMessage, ctx: TContext) => Promise<void>;
   handleThinking: (message: TMessage, ctx: TContext) => Promise<void>;
-  handleSettings?: (message: TMessage, ctx: TContext) => Promise<void>;
+  handleRestart: (message: TMessage, ctx: TContext) => Promise<void>;
   handleHelp: (
     message: TMessage,
     commandName: "help" | "start",
@@ -317,11 +318,6 @@ export interface TelegramCompactCommandDeps extends TelegramRuntimeEventRecorder
   setCompactionInProgress: (inProgress: boolean) => void;
   updateStatus: () => void;
   dispatchNextQueuedTelegramTurn: () => void;
-  requestDeferredDispatchNextQueuedTelegramTurn?: (
-    dispatch: () => void,
-  ) => void;
-  startTypingLoop?: () => void;
-  stopTypingLoop?: () => void;
   compact: (callbacks: {
     onComplete: () => void;
     onError: (error: unknown) => void;
@@ -361,11 +357,6 @@ export interface TelegramCommandTargetRuntimeDeps<TContext> {
     replyToMessageId: number,
     ctx: TContext,
   ) => Promise<void>;
-  openSettingsMenu?: (
-    chatId: number,
-    replyToMessageId: number,
-    ctx: TContext,
-  ) => Promise<void>;
   sendTextReply: (
     chatId: number,
     replyToMessageId: number,
@@ -386,7 +377,6 @@ export interface TelegramCommandTargetRuntime<
   ) => void;
   showStatus: (message: TMessage, ctx: TContext) => Promise<void>;
   openModelMenu: (message: TMessage, ctx: TContext) => Promise<void>;
-  openSettingsMenu: (message: TMessage, ctx: TContext) => Promise<void>;
   sendTextReply: (message: TMessage, text: string) => Promise<void>;
 }
 
@@ -471,7 +461,6 @@ export function createTelegramCommandTargetQueueRuntime<
     }),
     showStatus: deps.showStatus,
     openModelMenu: deps.openModelMenu,
-    openSettingsMenu: deps.openSettingsMenu,
     sendTextReply: deps.sendTextReply,
   });
 }
@@ -499,18 +488,6 @@ export function createTelegramCommandTargetRuntime<
     openModelMenu: (message, ctx) => {
       const target = getTelegramCommandMessageTarget(message);
       return deps.openModelMenu(target.chatId, target.replyToMessageId, ctx);
-    },
-    openSettingsMenu: async (message, ctx) => {
-      const target = getTelegramCommandMessageTarget(message);
-      if (!deps.openSettingsMenu) {
-        await deps.sendTextReply(
-          target.chatId,
-          target.replyToMessageId,
-          "Settings menu is unavailable.",
-        );
-        return;
-      }
-      await deps.openSettingsMenu(target.chatId, target.replyToMessageId, ctx);
     },
     sendTextReply: async (message, text) => {
       const target = getTelegramCommandMessageTarget(message);
@@ -552,11 +529,6 @@ export interface TelegramCommandRuntimeDeps<
   setCompactionInProgress: (inProgress: boolean) => void;
   updateStatus: (ctx: TContext) => void;
   dispatchNextQueuedTelegramTurn: (ctx: TContext) => void;
-  requestDeferredDispatchNextQueuedTelegramTurn?: (
-    dispatch: (ctx: TContext) => void,
-  ) => void;
-  startTypingLoop?: (ctx: TContext, chatId?: number) => void;
-  stopTypingLoop?: () => void;
   enqueueContinueTurn: (message: TMessage, ctx: TContext) => Promise<void>;
   compact: (
     ctx: TContext,
@@ -573,7 +545,6 @@ export interface TelegramCommandRuntimeDeps<
   openModelMenu: (message: TMessage, ctx: TContext) => Promise<void>;
   openThinkingMenu: (message: TMessage, ctx: TContext) => Promise<void>;
   openQueueMenu: (message: TMessage, ctx: TContext) => Promise<void>;
-  openSettingsMenu?: (message: TMessage, ctx: TContext) => Promise<void>;
   getAllowedUserId: () => number | undefined;
   setAllowedUserId: (userId: number) => void;
   registerBotCommands: () => Promise<void>;
@@ -583,7 +554,7 @@ export interface TelegramCommandRuntimeDeps<
 }
 
 export const TELEGRAM_APP_MENU_INTRO_HTML = [
-  "<b>π Telegram</b>",
+  "<b>π Telegram bridge</b>",
   "",
   `${formatTelegramCommandEmojiPrefix("start")}/start — Open menu / Pair bridge`,
   `${formatTelegramCommandEmojiPrefix("compact")}/compact — Compact current session`,
@@ -657,7 +628,6 @@ export const TELEGRAM_COMMAND_ACTIONS = {
   compact: { kind: "compact", executionMode: "immediate" },
   model: { kind: "model", executionMode: "immediate" },
   thinking: { kind: "thinking", executionMode: "immediate" },
-  settings: { kind: "settings", executionMode: "immediate" },
   help: { kind: "help", commandName: "help", executionMode: "immediate" },
   start: { kind: "help", commandName: "start", executionMode: "immediate" },
 } as const satisfies Record<TelegramReservedCommandName, TelegramCommandAction>;
@@ -768,22 +738,6 @@ export async function handleTelegramContinueCommand<TMessage, TContext>(
   await deps.enqueueContinueTurn(message, ctx);
 }
 
-function dispatchNextQueuedTelegramTurnAfterCompact(
-  deps: Pick<
-    TelegramCompactCommandDeps,
-    | "dispatchNextQueuedTelegramTurn"
-    | "requestDeferredDispatchNextQueuedTelegramTurn"
-  >,
-): void {
-  if (deps.requestDeferredDispatchNextQueuedTelegramTurn) {
-    deps.requestDeferredDispatchNextQueuedTelegramTurn(
-      deps.dispatchNextQueuedTelegramTurn,
-    );
-    return;
-  }
-  deps.dispatchNextQueuedTelegramTurn();
-}
-
 export async function handleTelegramCompactCommand(
   deps: TelegramCompactCommandDeps,
 ): Promise<void> {
@@ -802,31 +756,24 @@ export async function handleTelegramCompactCommand(
   }
   deps.setCompactionInProgress(true);
   deps.updateStatus();
-  let compactionStillInProgress = true;
   try {
     deps.compact({
       onComplete: () => {
-        compactionStillInProgress = false;
-        deps.stopTypingLoop?.();
         deps.setCompactionInProgress(false);
         deps.updateStatus();
-        dispatchNextQueuedTelegramTurnAfterCompact(deps);
+        deps.dispatchNextQueuedTelegramTurn();
         void deps.sendTextReply("Compaction completed.");
       },
       onError: (error) => {
-        compactionStillInProgress = false;
-        deps.stopTypingLoop?.();
         deps.setCompactionInProgress(false);
         deps.updateStatus();
-        dispatchNextQueuedTelegramTurnAfterCompact(deps);
+        deps.dispatchNextQueuedTelegramTurn();
         deps.recordRuntimeEvent?.("compact", error);
         const errorMessage = getTelegramCommandErrorMessage(error);
         void deps.sendTextReply(`Compaction failed: ${errorMessage}`);
       },
     });
   } catch (error) {
-    compactionStillInProgress = false;
-    deps.stopTypingLoop?.();
     deps.setCompactionInProgress(false);
     deps.updateStatus();
     deps.recordRuntimeEvent?.("compact", error);
@@ -835,37 +782,20 @@ export async function handleTelegramCompactCommand(
     return;
   }
   await deps.sendTextReply("Compaction started.");
-  if (compactionStillInProgress) deps.startTypingLoop?.();
-}
-
-function isTelegramStaleContextError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    (error.message.includes("stale after session") ||
-      error.message.includes("stale ctx"))
-  );
 }
 
 export async function handleTelegramStatusCommand<TContext>(deps: {
   ctx: TContext;
   showStatus: (ctx: TContext) => Promise<void>;
 }): Promise<void> {
-  try {
-    await deps.showStatus(deps.ctx);
-  } catch (error) {
-    if (!isTelegramStaleContextError(error)) throw error;
-  }
+  await deps.showStatus(deps.ctx);
 }
 
 export async function handleTelegramModelCommand<TContext>(deps: {
   ctx: TContext;
   openModelMenu: (ctx: TContext) => Promise<void>;
 }): Promise<void> {
-  try {
-    await deps.openModelMenu(deps.ctx);
-  } catch (error) {
-    if (!isTelegramStaleContextError(error)) throw error;
-  }
+  await deps.openModelMenu(deps.ctx);
 }
 
 export async function executeTelegramCommandAction<TMessage, TContext>(
@@ -904,10 +834,6 @@ export async function executeTelegramCommandAction<TMessage, TContext>(
     case "thinking":
       await deps.handleThinking(message, ctx);
       return true;
-    case "settings":
-      if (!deps.handleSettings) return false;
-      await deps.handleSettings(message, ctx);
-      return true;
     case "help":
       await deps.handleHelp(message, action.commandName, ctx);
       return true;
@@ -924,7 +850,6 @@ export interface TelegramCommandHandlerTargetRuntimeDeps<
       | "enqueueControlItem"
       | "showStatus"
       | "openModelMenu"
-      | "openSettingsMenu"
       | "sendTextReply"
       | "registerBotCommands"
     >,
@@ -956,7 +881,6 @@ export function createTelegramCommandHandlerTargetRuntime<
     dispatchNextQueuedTelegramTurn: deps.dispatchNextQueuedTelegramTurn,
     showStatus: deps.showStatus,
     openModelMenu: deps.openModelMenu,
-    openSettingsMenu: deps.openSettingsMenu,
     sendTextReply: deps.sendTextReply,
   });
   return createTelegramCommandHandler({
@@ -974,8 +898,6 @@ export function createTelegramCommandHandlerTargetRuntime<
     setCompactionInProgress: deps.setCompactionInProgress,
     updateStatus: deps.updateStatus,
     dispatchNextQueuedTelegramTurn: deps.dispatchNextQueuedTelegramTurn,
-    startTypingLoop: deps.startTypingLoop,
-    stopTypingLoop: deps.stopTypingLoop,
     enqueueContinueTurn: deps.enqueueContinueTurn,
     compact: deps.compact,
     enqueueControlItem: commandTargetRuntime.enqueueControlItem,
@@ -983,7 +905,6 @@ export function createTelegramCommandHandlerTargetRuntime<
     openModelMenu: commandTargetRuntime.openModelMenu,
     openThinkingMenu: deps.openThinkingMenu,
     openQueueMenu: deps.openQueueMenu,
-    openSettingsMenu: commandTargetRuntime.openSettingsMenu,
     getAllowedUserId: deps.getAllowedUserId,
     setAllowedUserId: deps.setAllowedUserId,
     registerBotCommands: createTelegramBotCommandRegistrar({
@@ -1121,18 +1042,7 @@ async function handleTelegramCommandRuntime<
           updateStatus: updateStatusFor(commandCtx),
           dispatchNextQueuedTelegramTurn: () =>
             deps.dispatchNextQueuedTelegramTurn(commandCtx),
-          requestDeferredDispatchNextQueuedTelegramTurn:
-            deps.requestDeferredDispatchNextQueuedTelegramTurn
-              ? (dispatch) =>
-                  deps.requestDeferredDispatchNextQueuedTelegramTurn?.(() =>
-                    dispatch(),
-                  )
-              : undefined,
           compact: (callbacks) => deps.compact(commandCtx, callbacks),
-          startTypingLoop: deps.startTypingLoop
-            ? () => deps.startTypingLoop?.(commandCtx, nextMessage.chat.id)
-            : undefined,
-          stopTypingLoop: deps.stopTypingLoop,
           sendTextReply: sendReplyFor(nextMessage),
           recordRuntimeEvent: deps.recordRuntimeEvent,
         });
@@ -1147,14 +1057,49 @@ async function handleTelegramCommandRuntime<
             deps.openModelMenu(nextMessage, controlCtx),
         });
       },
+      handleRestart: async (nextMessage, commandCtx) => {
+        const sendToRestart = sendReplyFor(nextMessage);
+        let costStr = "$?.???";
+        let sm;
+        try {
+          const ctxAny = commandCtx;
+          sm = ctxAny["sessionManager"];
+          if (sm && typeof sm.getEntries === "function") {
+            const entries = sm.getEntries();
+            let total = 0;
+            for (const e of entries) {
+              const c = e.message?.usage?.cost?.total;
+              if (typeof c === "number") total += c;
+            }
+            costStr = total.toFixed(4);
+            // AAAK context summary - single line, one msg length
+            try {
+              let lastMsg = "";
+              for (const e of entries.slice().reverse()) {
+                if (e.type === "message" && e.message?.role === "user" && Array.isArray(e.message.content)) {
+                  const txt = e.message.content.map((c) => c.text ?? "").filter(Boolean).join(" ").replace(/[|\n]/g, " ").trim();
+                  if (txt) { lastMsg = txt.slice(0, 80); break; }
+                }
+              }
+              const msgCount = entries.filter((e) => e.type === "message").length;
+              let summary = `turns=${msgCount}|cost=${costStr}`;
+              if (lastMsg) summary += `|last=${lastMsg}`;
+              fs.writeFileSync("/tmp/pi-telegram-context-summary", summary, "utf-8");
+            } catch {}
+          }
+        } catch {}
+        try { fs.writeFileSync("/tmp/pi-force-new-session", "1", "utf-8"); } catch {}
+        try { fs.writeFileSync("/tmp/pi-telegram-restart-marker", costStr, "utf-8"); } catch {}
+        await sendToRestart(`🔄 Restarting pi-telegram...\n\n📊 Previous session cost: ${costStr}\n✅ Fresh session starting - cost reset to $0.0000`);
+        setTimeout(() => {
+          try {
+            execSync("systemctl --user restart pi-telegram", { timeout: 5000 });
+          } catch {}
+        }, 1000);
+      },
       handleThinking: async (nextMessage, commandCtx) => {
         await deps.openThinkingMenu(nextMessage, commandCtx);
       },
-      handleSettings: deps.openSettingsMenu
-        ? async (nextMessage, commandCtx) => {
-            await deps.openSettingsMenu?.(nextMessage, commandCtx);
-          }
-        : undefined,
       handleHelp: async (nextMessage, _nextCommandName, commandCtx) => {
         try {
           await deps.registerBotCommands();

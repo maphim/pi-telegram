@@ -33,17 +33,19 @@ export interface TelegramReplyToMessage {
   message_id?: number;
   text?: string;
   caption?: string;
+  from?: { first_name?: string; is_bot?: boolean };
 }
 
 export interface TelegramSticker {
   file_id: string;
 }
 
+
 export interface TelegramMediaMessage {
   message_id: number;
+  reply_to_message?: TelegramReplyToMessage;
   text?: string;
   caption?: string;
-  reply_to_message?: TelegramReplyToMessage;
   media_group_id?: string;
   photo?: TelegramPhotoSize[];
   document?: TelegramDocument;
@@ -60,20 +62,17 @@ export interface TelegramMediaGroupMessage {
   media_group_id?: string;
 }
 
-export interface TelegramMediaGroupState<TMessage, TContext = unknown> {
+export interface TelegramMediaGroupState<TMessage> {
   messages: TMessage[];
-  context?: TContext;
   flushTimer?: ReturnType<typeof setTimeout>;
 }
 
 export interface TelegramMediaGroupController<
   TMessage extends TelegramMediaGroupMessage,
-  TContext = unknown,
 > {
   queueMessage: (options: {
     message: TMessage;
-    context?: TContext;
-    dispatchMessages: (messages: TMessage[], ctx?: TContext) => void;
+    dispatchMessages: (messages: TMessage[]) => void;
   }) => boolean;
   removeMessages: (messageIds: number[]) => number;
   clear: () => void;
@@ -83,7 +82,7 @@ export interface TelegramMediaGroupDispatchRuntimeDeps<
   TMessage extends TelegramMediaGroupMessage,
   TContext,
 > {
-  mediaGroups: TelegramMediaGroupController<TMessage, TContext>;
+  mediaGroups: TelegramMediaGroupController<TMessage>;
   dispatchMessages: (messages: TMessage[], ctx: TContext) => Promise<void>;
 }
 
@@ -173,12 +172,6 @@ function isImageMimeType(mimeType: string | undefined): boolean {
   return mimeType?.toLowerCase().startsWith("image/") ?? false;
 }
 
-export function extractTelegramMessageText(
-  message: TelegramMediaMessage,
-): string {
-  return (message.text || message.caption || "").trim();
-}
-
 function truncateTelegramReplyContextText(text: string): string {
   if (text.length <= TELEGRAM_REPLY_CONTEXT_MAX_LENGTH) return text;
   return `${text.slice(0, TELEGRAM_REPLY_CONTEXT_MAX_LENGTH).trimEnd()}…`;
@@ -211,6 +204,12 @@ export function extractTelegramMessagePromptText(
     extractTelegramMessageText(message),
     extractTelegramReplyContextText(message),
   );
+}
+
+export function extractTelegramMessageText(
+  message: TelegramMediaMessage,
+): string {
+  return (message.text || message.caption || "").trim();
 }
 
 export function extractTelegramMessagesText(
@@ -253,7 +252,7 @@ export function getTelegramMediaGroupKey(
 export function removePendingTelegramMediaGroupMessages<
   TMessage extends TelegramMediaGroupMessage,
 >(
-  groups: Map<string, TelegramMediaGroupState<TMessage, unknown>>,
+  groups: Map<string, TelegramMediaGroupState<TMessage>>,
   messageIds: number[],
   clearTimer: (timer: ReturnType<typeof setTimeout>) => void,
 ): number {
@@ -277,27 +276,24 @@ export function removePendingTelegramMediaGroupMessages<
 
 export function queueTelegramMediaGroupMessage<
   TMessage extends TelegramMediaGroupMessage,
-  TContext = unknown,
 >(options: {
   message: TMessage;
-  context?: TContext;
-  groups: Map<string, TelegramMediaGroupState<TMessage, TContext>>;
+  groups: Map<string, TelegramMediaGroupState<TMessage>>;
   debounceMs: number;
   setTimer: (callback: () => void, ms: number) => ReturnType<typeof setTimeout>;
   clearTimer: (timer: ReturnType<typeof setTimeout>) => void;
-  dispatchMessages: (messages: TMessage[], ctx?: TContext) => void;
+  dispatchMessages: (messages: TMessage[]) => void;
 }): boolean {
   const key = getTelegramMediaGroupKey(options.message);
   if (!key) return false;
   const existing = options.groups.get(key) ?? { messages: [] };
   existing.messages.push(options.message);
-  existing.context = options.context;
   if (existing.flushTimer) options.clearTimer(existing.flushTimer);
   existing.flushTimer = options.setTimer(() => {
     const state = options.groups.get(key);
     options.groups.delete(key);
     if (!state) return;
-    options.dispatchMessages(state.messages, state.context);
+    options.dispatchMessages(state.messages);
   }, options.debounceMs);
   options.groups.set(key, existing);
   return true;
@@ -305,11 +301,10 @@ export function queueTelegramMediaGroupMessage<
 
 export function createTelegramMediaGroupController<
   TMessage extends TelegramMediaGroupMessage,
-  TContext = unknown,
 >(
   options: TelegramMediaGroupControllerOptions = {},
-): TelegramMediaGroupController<TMessage, TContext> {
-  const groups = new Map<string, TelegramMediaGroupState<TMessage, TContext>>();
+): TelegramMediaGroupController<TMessage> {
+  const groups = new Map<string, TelegramMediaGroupState<TMessage>>();
   const debounceMs = options.debounceMs ?? TELEGRAM_MEDIA_GROUP_DEBOUNCE_MS;
   const setTimer =
     options.setTimer ??
@@ -317,10 +312,9 @@ export function createTelegramMediaGroupController<
       setTimeout(callback, ms));
   const clearTimer = options.clearTimer ?? clearTimeout;
   return {
-    queueMessage: ({ message, context, dispatchMessages }) =>
+    queueMessage: ({ message, dispatchMessages }) =>
       queueTelegramMediaGroupMessage({
         message,
-        context,
         groups,
         debounceMs,
         setTimer,
@@ -348,11 +342,8 @@ export function createTelegramMediaGroupDispatchRuntime<
     handleMessage: async (message, ctx) => {
       const queuedMediaGroup = deps.mediaGroups.queueMessage({
         message,
-        context: ctx,
-        dispatchMessages: (messages, queuedCtx) => {
-          if (queuedCtx !== undefined) {
-            void deps.dispatchMessages(messages, queuedCtx);
-          }
+        dispatchMessages: (messages) => {
+          void deps.dispatchMessages(messages, ctx);
         },
       });
       if (queuedMediaGroup) return;

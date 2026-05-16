@@ -31,14 +31,12 @@ export const TELEGRAM_PRIORITY_REACTIONS = [
   { id: 11, name: "lightning", emoji: "⚡" },
   { id: 12, name: "heart", emoji: "❤" },
   { id: 13, name: "dove", emoji: "🕊" },
-  { id: 14, name: "fire", emoji: "🔥" },
 ] as const;
 export const TELEGRAM_REMOVAL_REACTIONS = [
   { id: 20, name: "dislike", emoji: "👎" },
   { id: 21, name: "ghost", emoji: "👻" },
   { id: 22, name: "broken-heart", emoji: "💔" },
   { id: 23, name: "poop", emoji: "💩" },
-  { id: 24, name: "wastebasket", emoji: "🗑" },
 ] as const;
 export const TELEGRAM_PRIORITY_REACTION_EMOJIS =
   TELEGRAM_PRIORITY_REACTIONS.map((reaction) => reaction.emoji);
@@ -130,20 +128,10 @@ export interface TelegramCallbackQuery {
   message?: TelegramUpdateMessage;
 }
 
-export interface TelegramGuestMessage {
-  guest_query_id: string;
-  chat: TelegramChat;
-  from?: TelegramUser;
-  message_id?: number;
-  text?: string;
-  reply_to_message?: TelegramUpdateMessage;
-}
-
 export interface TelegramUpdateRouting {
   message?: TelegramUpdateMessage;
   edited_message?: TelegramUpdateMessage;
   callback_query?: TelegramCallbackQuery;
-  guest_message?: TelegramGuestMessage;
 }
 
 export function getAuthorizedTelegramCallbackQuery(
@@ -188,16 +176,6 @@ export function getAuthorizedTelegramEditedMessage(
   return message;
 }
 
-export function getAuthorizedTelegramGuestMessage(
-  update: TelegramUpdateRouting,
-): TelegramGuestMessage | undefined {
-  const guestMessage = update.guest_message;
-  if (!guestMessage || !guestMessage.from || guestMessage.from.is_bot) {
-    return undefined;
-  }
-  return guestMessage;
-}
-
 // --- Flow ---
 
 export interface TelegramMessageReactionUpdated {
@@ -218,7 +196,6 @@ export type TelegramUpdateFlowAction<
     TelegramMessageReactionUpdated,
   TCallbackQuery extends TelegramCallbackQuery = TelegramCallbackQuery,
   TMessage extends TelegramUpdateMessage = TelegramUpdateMessage,
-  TGuestMessage extends TelegramGuestMessage = TelegramGuestMessage,
 > =
   | { kind: "ignore" }
   | { kind: "deleted"; messageIds: number[] }
@@ -237,11 +214,6 @@ export type TelegramUpdateFlowAction<
       kind: "edited-message";
       message: TMessage & { from: TelegramUser };
       authorization: TelegramAuthorizationState;
-    }
-  | {
-      kind: "guest";
-      guestMessage: TGuestMessage & { from: TelegramUser };
-      authorization: TelegramAuthorizationState;
     };
 
 export function buildTelegramUpdateFlowAction<
@@ -252,8 +224,7 @@ export function buildTelegramUpdateFlowAction<
 ): TelegramUpdateFlowAction<
   NonNullable<TUpdate["message_reaction"]>,
   NonNullable<TUpdate["callback_query"]>,
-  NonNullable<TUpdate["message"] | TUpdate["edited_message"]>,
-  NonNullable<TUpdate["guest_message"]>
+  NonNullable<TUpdate["message"] | TUpdate["edited_message"]>
 > {
   const deletedMessageIds = extractDeletedTelegramMessageIds(update);
   if (deletedMessageIds.length > 0) {
@@ -299,19 +270,6 @@ export function buildTelegramUpdateFlowAction<
       ),
     };
   }
-  const guestMessage = getAuthorizedTelegramGuestMessage(update);
-  if (guestMessage?.from) {
-    return {
-      kind: "guest",
-      guestMessage: guestMessage as NonNullable<TUpdate["guest_message"]> & {
-        from: TelegramUser;
-      },
-      authorization: getTelegramAuthorizationState(
-        guestMessage.from.id,
-        allowedUserId,
-      ),
-    };
-  }
   return { kind: "ignore" };
 }
 
@@ -322,7 +280,6 @@ export type TelegramUpdateExecutionPlan<
     TelegramMessageReactionUpdated,
   TCallbackQuery extends TelegramCallbackQuery = TelegramCallbackQuery,
   TMessage extends TelegramUpdateMessage = TelegramUpdateMessage,
-  TGuestMessage extends TelegramGuestMessage = TelegramGuestMessage,
 > =
   | { kind: "ignore" }
   | { kind: "deleted"; messageIds: number[] }
@@ -348,31 +305,15 @@ export type TelegramUpdateExecutionPlan<
       message: TMessage & { from: TelegramUser };
       shouldPair: boolean;
       shouldDeny: boolean;
-    }
-  | {
-      kind: "guest";
-      guestMessage: TGuestMessage & { from: TelegramUser };
-      shouldDeny: boolean;
     };
 
 export function buildTelegramUpdateExecutionPlan<
   TReactionUpdate extends TelegramMessageReactionUpdated,
   TCallbackQuery extends TelegramCallbackQuery,
   TMessage extends TelegramUpdateMessage,
-  TGuestMessage extends TelegramGuestMessage,
 >(
-  action: TelegramUpdateFlowAction<
-    TReactionUpdate,
-    TCallbackQuery,
-    TMessage,
-    TGuestMessage
-  >,
-): TelegramUpdateExecutionPlan<
-  TReactionUpdate,
-  TCallbackQuery,
-  TMessage,
-  TGuestMessage
-> {
+  action: TelegramUpdateFlowAction<TReactionUpdate, TCallbackQuery, TMessage>,
+): TelegramUpdateExecutionPlan<TReactionUpdate, TCallbackQuery, TMessage> {
   switch (action.kind) {
     case "ignore":
       return { kind: "ignore" };
@@ -400,12 +341,6 @@ export function buildTelegramUpdateExecutionPlan<
         kind: "edited-message",
         message: action.message,
         shouldPair: action.authorization.kind === "pair",
-        shouldDeny: action.authorization.kind === "deny",
-      };
-    case "guest":
-      return {
-        kind: "guest",
-        guestMessage: action.guestMessage,
         shouldDeny: action.authorization.kind === "deny",
       };
   }
@@ -450,7 +385,6 @@ export interface TelegramUpdateRuntimeDeps<
     callbackQueryId: string,
     text?: string,
   ) => Promise<void>;
-  answerGuestQuery: (guestQueryId: string, text?: string) => Promise<void>;
   handleAuthorizedTelegramCallbackQuery: (
     query: TCallbackQuery,
     ctx: TContext,
@@ -468,10 +402,6 @@ export interface TelegramUpdateRuntimeDeps<
     message: TMessage,
     ctx: TContext,
   ) => unknown;
-  handleAuthorizedTelegramGuestMessage?: (
-    guestMessage: TelegramGuestMessage & { from: TelegramUser },
-    ctx: TContext,
-  ) => Promise<void>;
 }
 
 export interface TelegramUpdateRuntimeControllerDeps<
@@ -499,7 +429,6 @@ export interface TelegramUpdateRuntimeControllerDeps<
     callbackQueryId: string,
     text?: string,
   ) => Promise<void>;
-  answerGuestQuery: (guestQueryId: string, text?: string) => Promise<void>;
   handleAuthorizedTelegramCallbackQuery: (
     query: TCallbackQuery,
     ctx: TContext,
@@ -517,10 +446,6 @@ export interface TelegramUpdateRuntimeControllerDeps<
     message: TMessage,
     ctx: TContext,
   ) => unknown;
-  handleAuthorizedTelegramGuestMessage?: (
-    guestMessage: TelegramGuestMessage & { from: TelegramUser },
-    ctx: TContext,
-  ) => Promise<void>;
 }
 
 export interface TelegramUpdateRuntimeController<
@@ -609,15 +534,12 @@ export function createTelegramPairedUpdateRuntime<
       updateStatus: deps.updateStatus,
     }).pairIfNeeded,
     answerCallbackQuery: deps.answerCallbackQuery,
-    answerGuestQuery: deps.answerGuestQuery,
     handleAuthorizedTelegramCallbackQuery:
       deps.handleAuthorizedTelegramCallbackQuery,
     sendTextReply: deps.sendTextReply,
     handleAuthorizedTelegramMessage: deps.handleAuthorizedTelegramMessage,
     handleAuthorizedTelegramEditedMessage:
       deps.handleAuthorizedTelegramEditedMessage,
-    handleAuthorizedTelegramGuestMessage:
-      deps.handleAuthorizedTelegramGuestMessage,
   });
 }
 
@@ -658,15 +580,12 @@ export function createTelegramUpdateRuntime<
         handleAuthorizedTelegramReactionUpdate: handleAuthorizedReactionUpdate,
         pairTelegramUserIfNeeded: deps.pairTelegramUserIfNeeded,
         answerCallbackQuery: deps.answerCallbackQuery,
-        answerGuestQuery: deps.answerGuestQuery,
         handleAuthorizedTelegramCallbackQuery:
           deps.handleAuthorizedTelegramCallbackQuery,
         sendTextReply: deps.sendTextReply,
         handleAuthorizedTelegramMessage: deps.handleAuthorizedTelegramMessage,
         handleAuthorizedTelegramEditedMessage:
           deps.handleAuthorizedTelegramEditedMessage,
-        handleAuthorizedTelegramGuestMessage:
-          deps.handleAuthorizedTelegramGuestMessage,
       }),
   };
 }
@@ -746,14 +665,6 @@ export async function handleAuthorizedTelegramReactionUpdate<TContext>(
   );
 }
 
-function isTelegramStaleContextError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    (error.message.includes("stale after session") ||
-      error.message.includes("stale ctx"))
-  );
-}
-
 export async function executeTelegramUpdatePlan<
   TContext = unknown,
   TReactionUpdate extends TelegramMessageReactionUpdated =
@@ -769,85 +680,65 @@ export async function executeTelegramUpdatePlan<
     TMessage
   >,
 ): Promise<void> {
-  try {
-    if (plan.kind === "ignore") return;
-    if (plan.kind === "deleted") {
-      deps.removePendingMediaGroupMessages(plan.messageIds);
-      deps.removeQueuedTelegramTurnsByMessageIds(plan.messageIds, deps.ctx);
-      return;
-    }
-    if (plan.kind === "reaction") {
-      await deps.handleAuthorizedTelegramReactionUpdate(
-        plan.reactionUpdate,
-        deps.ctx,
-      );
-      return;
-    }
-    if (plan.kind === "callback") {
-      if (plan.shouldPair) {
-        await deps.pairTelegramUserIfNeeded(plan.query.from.id, deps.ctx);
-      }
-      if (plan.shouldDeny) {
-        const callbackQueryId = getTelegramCallbackQueryId(plan.query);
-        if (callbackQueryId) {
-          await deps.answerCallbackQuery(
-            callbackQueryId,
-            "This bot is not authorized for your account.",
-          );
-        }
-        return;
-      }
-      await deps.handleAuthorizedTelegramCallbackQuery(plan.query, deps.ctx);
-      return;
-    }
-    if (plan.kind === "guest") {
-      if (plan.shouldDeny) {
-        await deps.answerGuestQuery(
-          plan.guestMessage.guest_query_id,
-          "Access denied.",
-        );
-        return;
-      }
-      if (deps.handleAuthorizedTelegramGuestMessage) {
-        await deps.handleAuthorizedTelegramGuestMessage(
-          plan.guestMessage,
-          deps.ctx,
-        );
-      }
-      return;
-    }
-    const pairedNow = plan.shouldPair
-      ? await deps.pairTelegramUserIfNeeded(plan.message.from.id, deps.ctx)
-      : false;
-    const replyTarget = getTelegramMessageReplyTarget(plan.message);
-    if (
-      plan.kind === "message" &&
-      pairedNow &&
-      plan.shouldNotifyPaired &&
-      replyTarget
-    ) {
-      await deps.sendTextReply(
-        replyTarget.chatId,
-        replyTarget.messageId,
-        "Telegram bridge paired with this account.",
-      );
+  if (plan.kind === "ignore") return;
+  if (plan.kind === "deleted") {
+    deps.removePendingMediaGroupMessages(plan.messageIds);
+    deps.removeQueuedTelegramTurnsByMessageIds(plan.messageIds, deps.ctx);
+    return;
+  }
+  if (plan.kind === "reaction") {
+    await deps.handleAuthorizedTelegramReactionUpdate(
+      plan.reactionUpdate,
+      deps.ctx,
+    );
+    return;
+  }
+  if (plan.kind === "callback") {
+    if (plan.shouldPair) {
+      await deps.pairTelegramUserIfNeeded(plan.query.from.id, deps.ctx);
     }
     if (plan.shouldDeny) {
-      if (replyTarget) {
-        await deps.sendTextReply(
-          replyTarget.chatId,
-          replyTarget.messageId,
+      const callbackQueryId = getTelegramCallbackQueryId(plan.query);
+      if (callbackQueryId) {
+        await deps.answerCallbackQuery(
+          callbackQueryId,
           "This bot is not authorized for your account.",
         );
       }
       return;
     }
-    if (plan.kind === "edited-message") {
-      await deps.handleAuthorizedTelegramEditedMessage(plan.message, deps.ctx);
-      return;
-    }
-    await deps.handleAuthorizedTelegramMessage(plan.message, deps.ctx);
-  } catch (error) {
-    if (!isTelegramStaleContextError(error)) throw error;
+    await deps.handleAuthorizedTelegramCallbackQuery(plan.query, deps.ctx);
+    return;
   }
+  const pairedNow = plan.shouldPair
+    ? await deps.pairTelegramUserIfNeeded(plan.message.from.id, deps.ctx)
+    : false;
+  const replyTarget = getTelegramMessageReplyTarget(plan.message);
+  if (
+    plan.kind === "message" &&
+    pairedNow &&
+    plan.shouldNotifyPaired &&
+    replyTarget
+  ) {
+    await deps.sendTextReply(
+      replyTarget.chatId,
+      replyTarget.messageId,
+      "Telegram bridge paired with this account.",
+    );
+  }
+  if (plan.shouldDeny) {
+    if (replyTarget) {
+      await deps.sendTextReply(
+        replyTarget.chatId,
+        replyTarget.messageId,
+        "This bot is not authorized for your account.",
+      );
+    }
+    return;
+  }
+  if (plan.kind === "edited-message") {
+    await deps.handleAuthorizedTelegramEditedMessage(plan.message, deps.ctx);
+    return;
+  }
+  await deps.handleAuthorizedTelegramMessage(plan.message, deps.ctx);
 }
