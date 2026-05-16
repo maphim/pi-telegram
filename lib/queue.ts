@@ -318,7 +318,7 @@ export function prioritizeTelegramQueuePrompt<TContext = unknown>(
   items: TelegramQueueItem<TContext>[],
   messageId: number,
   laneOrder: number,
-  priorityEmoji = "⚡",
+  priorityEmoji = "[!]",
 ): { items: TelegramQueueItem<TContext>[]; changed: boolean } {
   let changed = false;
   const nextItems = items.map((item) => {
@@ -360,7 +360,7 @@ function formatTelegramQueueItemStatusSummary<TContext = unknown>(
   item: TelegramQueueItem<TContext>,
 ): string {
   if (item.queueLane === "priority") {
-    return `${item.kind === "prompt" ? (item.priorityEmoji ?? "⚡") : "⚡"} ${item.statusSummary}`;
+    return `${item.kind === "prompt" ? (item.priorityEmoji ?? "[!]") : "[!]"} ${item.statusSummary}`;
   }
   return item.statusSummary;
 }

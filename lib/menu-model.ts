@@ -253,9 +253,9 @@ export interface TelegramModelMenuRuntime<
 
 export const TELEGRAM_MODEL_PAGE_SIZE = 6;
 const TELEGRAM_MODEL_PAGE_PICKER_ROW_SIZE = 4;
-export const MODEL_MENU_TITLE = "<b>🤖 Choose a model:</b>";
+export const MODEL_MENU_TITLE = "<b>[*] Choose a model:</b>";
 export const MODEL_PAGE_MENU_TITLE = "<b>Choose a page:</b>";
-export const MODEL_DETAIL_MENU_TITLE = "<b>🤖 Model:</b>";
+export const MODEL_DETAIL_MENU_TITLE = "<b>[*] Model:</b>";
 
 function truncateTelegramButtonLabel(label: string, maxLength = 56): string {
   return label.length <= maxLength
@@ -345,7 +345,8 @@ export function formatScopedModelButtonText<
   entry: ScopedTelegramModel<TModel>,
   currentModel: TModel | undefined,
 ): string {
-  let label = `${modelsMatch(entry.model, currentModel) ? "🟢 " : ""}${entry.model.provider}/${entry.model.id}`;
+  let label = `${modelsMatch(entry.model, currentModel) ? "[*] " : ""}${entry.model.id} [${entry.model.provider}]`;
+
   if (entry.thinkingLevel) {
     label += ` · ${entry.thinkingLevel}`;
   }
@@ -975,15 +976,15 @@ export function buildModelMenuReplyMarkup(
   pageSize: number,
 ): TelegramReplyMarkup {
   const menuPage = getTelegramModelMenuPage(state, pageSize);
-  const rows = [[{ text: "⬆️ Main menu", callback_data: "menu:back" }]];
+  const rows = [[{ text: "[^] Main menu", callback_data: "menu:back" }]];
   if (state.scopedModels.length > 0) {
     rows.push([
       {
-        text: state.scope === "scoped" ? "🟡 Scoped" : "⚫️ Scoped",
+        text: state.scope === "scoped" ? "[S] Scoped" : "[ ] Scoped",
         callback_data: "model:scope:scoped",
       },
       {
-        text: state.scope === "all" ? "🟡 All" : "⚫️ All",
+        text: state.scope === "all" ? "[*] All" : "[ ] All",
         callback_data: "model:scope:all",
       },
     ]);
@@ -995,12 +996,12 @@ export function buildModelMenuReplyMarkup(
   rows.push(
     menuPage.pageCount > 1
       ? [
-          { text: "⬅️", callback_data: `model:page:${previousPage}` },
+          { text: "[<]", callback_data: `model:page:${previousPage}` },
           {
             text: `${menuPage.page + 1}/${menuPage.pageCount}`,
             callback_data: "model:pages",
           },
-          { text: "➡️", callback_data: `model:page:${nextPage}` },
+          { text: "[>]", callback_data: `model:page:${nextPage}` },
         ]
       : [
           {
@@ -1028,7 +1029,7 @@ export function buildModelDetailMenuReplyMarkup(
   if (selection.kind !== "selected") {
     return {
       inline_keyboard: [
-        [{ text: "⬆️ Back", callback_data: "model:pages:back" }],
+        [{ text: "[^] Back", callback_data: "model:pages:back" }],
       ],
     };
   }
@@ -1037,20 +1038,20 @@ export function buildModelDetailMenuReplyMarkup(
   const scoped = isTelegramModelScoped(state, model);
   return {
     inline_keyboard: [
-      [{ text: "⬆️ Back", callback_data: "model:pages:back" }],
+      [{ text: "[^] Back", callback_data: "model:pages:back" }],
       [
         {
-          text: active ? "🟢 Active" : "☑️ Activate",
+          text: active ? "[*] Active" : "[+] Activate",
           callback_data: "model:pick-selected",
         },
       ],
       [
         {
-          text: scoped ? "🟡 Scoped" : "⚫️ Scoped",
+          text: scoped ? "[S] Scoped" : "[ ] Scoped",
           callback_data: "model:scope-enable",
         },
         {
-          text: scoped ? "⚫️ All" : "🟡 All",
+          text: scoped ? "[ ] All" : "[S] All",
           callback_data: "model:scope-disable",
         },
       ],
@@ -1072,7 +1073,7 @@ export function buildModelPageMenuReplyMarkup(
   pageSize: number,
 ): TelegramReplyMarkup {
   const menuPage = getTelegramModelMenuPage(state, pageSize);
-  const rows = [[{ text: "⬆️ Back", callback_data: "model:pages:back" }]];
+  const rows = [[{ text: "[^] Back", callback_data: "model:pages:back" }]];
   for (
     let page = 0;
     page < menuPage.pageCount;
@@ -1091,7 +1092,7 @@ export function buildModelPageMenuReplyMarkup(
           return {
             text:
               pageIndex === menuPage.page
-                ? `🟢 ${pageIndex + 1}`
+                ? `[*] ${pageIndex + 1}`
                 : String(pageIndex + 1),
             callback_data: `model:page:${pageIndex}`,
           };

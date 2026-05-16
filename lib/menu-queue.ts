@@ -71,20 +71,17 @@ function buildTelegramQueueMenuReplyMarkup(
   items: readonly TelegramQueueMenuItem[],
   emptyRefreshIndex = 0,
 ): TelegramQueueMenuReplyMarkup {
-  const backRow = [{ text: "⬆️ Main menu", callback_data: "menu:back" }];
-  const nextEmptyRefreshIndex =
-    (emptyRefreshIndex + 1) % EMPTY_QUEUE_REFRESH_TITLES.length;
-  const refreshData =
-    items.length === 0
-      ? `queue:refresh:${nextEmptyRefreshIndex}`
-      : "queue:refresh";
-  const refreshRow = [{ text: "🌀 Refresh", callback_data: refreshData }];
-  if (items.length === 0) return { inline_keyboard: [backRow, refreshRow] };
+  const backRow = [{ text: "[^] Main menu", callback_data: "menu:back" }];
+  if (items.length === 0) {
+    const refreshRow = [{ text: "[R] Refresh", callback_data: "queue:refresh" }];
+    return { inline_keyboard: [backRow, refreshRow] };
+  }
+
   const rows = items.map(function buildTelegramQueueMenuRow(item, index) {
     const prefix = item.isPriority
-      ? `${item.priorityEmoji ?? "⚡"} `
+      ? `${item.priorityEmoji ?? "[!]"} `
       : item.hasAttachments
-        ? "📎 "
+        ? "[+] "
         : "";
     const label = `${index + 1}. ${prefix}${item.statusSummary}`;
     return [
@@ -143,7 +140,7 @@ function escapeTelegramQueueMenuHtmlPreview(text: string): string {
   return truncated ? escaped + suffix : escaped;
 }
 function getTelegramQueueMenuItemText(item: TelegramQueueMenuItem): string {
-  const badge = item.isPriority ? ` ${item.priorityEmoji ?? "⚡"}` : "";
+  const badge = item.isPriority ? ` ${item.priorityEmoji ?? "[!]"}` : "";
   const heading = `<b>${item.queuePosition}.</b>${badge}`;
   const preview = `<pre>${escapeTelegramQueueMenuHtmlPreview(item.promptText)}</pre>`;
   return `${heading}\n${preview}`;
@@ -155,20 +152,20 @@ function buildTelegramQueueItemSubmenuReplyMarkup(
 ): TelegramQueueMenuReplyMarkup {
   return {
     inline_keyboard: [
-      [{ text: "⬆️ Back", callback_data: "queue:list" }],
+      [{ text: "[^] Back", callback_data: "queue:list" }],
       [
         {
-          text: isPriority ? "🟡 Priority" : "⚫️ Priority",
+          text: isPriority ? "[*] Priority" : "[ ] Priority",
           callback_data: `queue:prio-set:${chatId}:${replyToMessageId}:priority`,
         },
         {
-          text: isPriority ? "⚫️ Normal" : "🟡 Normal",
+          text: isPriority ? "[ ] Normal" : "[*] Normal",
           callback_data: `queue:prio-set:${chatId}:${replyToMessageId}:normal`,
         },
       ],
       [
         {
-          text: "🗑 Delete",
+          text: "[X] Delete",
           callback_data: `queue:delete:${chatId}:${replyToMessageId}`,
         },
       ],
@@ -183,11 +180,11 @@ function buildTelegramQueueDeleteConfirmationReplyMarkup(
     inline_keyboard: [
       [
         {
-          text: "🗑 Yes, delete",
+          text: "[X] Yes, delete",
           callback_data: `queue:confirm-delete:${chatId}:${replyToMessageId}`,
         },
         {
-          text: "❌ No",
+          text: "[-] No",
           callback_data: `queue:keep:${chatId}:${replyToMessageId}`,
         },
       ],
@@ -341,11 +338,9 @@ function getTelegramQueueMenuListText(
   items: readonly TelegramQueueMenuItem[],
   emptyRefreshIndex?: number,
 ): string {
-  if (items.length > 0) return "<b>⏳ Queue:</b>";
-  if (emptyRefreshIndex === undefined) return "<b>⌛ Queue is empty.</b>";
-  return EMPTY_QUEUE_REFRESH_TITLES[
-    emptyRefreshIndex % EMPTY_QUEUE_REFRESH_TITLES.length
-  ];
+  if (items.length === 0) return "<b>[Q] Queue is empty.</b>";
+  return "<b>[Q] Queue:</b>";
+
 }
 async function updateTelegramQueueMenuList<Context>(
   callbackQueryId: string,

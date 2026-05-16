@@ -30,16 +30,17 @@ export interface TelegramPromptTemplateMenuCommand {
 }
 
 export const TELEGRAM_COMMAND_EMOJI = {
-  start: "🟢",
-  status: "📊",
-  model: "🤖",
-  thinking: "🧠",
-  compact: "🗜",
-  queue: "🔢",
-  next: "⏩",
-  continue: "▶️",
-  abort: "⏹️",
-  stop: "🟥",
+  start: "[*]",
+  status: "[=]",
+  model: "[M]",
+  thinking: "[T]",
+  compact: "[C]",
+  restart: "[R]",
+  queue: "[Q]",
+  next: "[>]",
+  continue: "[>>]",
+  abort: "[X]",
+  stop: "[!]",
 } as const;
 
 export type TelegramCommandEmojiName = keyof typeof TELEGRAM_COMMAND_EMOJI;
@@ -102,6 +103,13 @@ export const TELEGRAM_BUILTIN_BOT_COMMANDS: readonly TelegramBotCommandDefinitio
       description: formatTelegramBotCommandDescription(
         "stop",
         "Abort π & Clear queue",
+      ),
+    },
+    {
+      command: "restart",
+      description: formatTelegramBotCommandDescription(
+        "restart",
+        "Restart Telegram bridge",
       ),
     },
   ];
@@ -185,6 +193,37 @@ export function registerTelegramBridgeCommands(
       ctx.ui.notify(deps.getStatusLines().join("\n"), "info");
     },
   });
+  pi.registerCommand("telegram-settings", {
+    description: "Open Telegram bridge settings",
+    handler: async (_args, ctx) => {
+      if (!deps.isProactivePushEnabled || !deps.setProactivePushEnabled) {
+        ctx.ui.notify("Telegram settings are unavailable.", "warning");
+        return;
+      }
+      await deps.reloadConfig();
+      const enabled = deps.isProactivePushEnabled();
+      const nextEnabled = !enabled;
+      const label = `${enabled ? "[*]" : "[ ]"} Proactive push`;
+      const action = `${nextEnabled ? "Enable" : "Disable"} proactive push`;
+      const select = (ctx.ui as TelegramBridgeSettingsSelectUi).select;
+      if (!select) {
+        ctx.ui.notify(
+          `${label}\n${action}: /telegram-settings requires interactive mode.`,
+          "info",
+        );
+        return;
+      }
+      const selected = await select("Telegram settings", [label, "Cancel"]);
+      if (selected !== label) return;
+      await deps.setProactivePushEnabled(nextEnabled);
+      deps.updateStatus(ctx);
+      ctx.ui.notify(
+        `Proactive push ${nextEnabled ? "enabled" : "disabled"}.`,
+        "info",
+      );
+    },
+  });
+
   pi.registerCommand("telegram-connect", {
     description: "Start the Telegram bridge in this π session",
     handler: async (_args, ctx) => {
@@ -553,16 +592,7 @@ export interface TelegramCommandRuntimeDeps<
   sendTextReply: (message: TMessage, text: string) => Promise<void>;
 }
 
-export const TELEGRAM_APP_MENU_INTRO_HTML = [
-  "<b>π Telegram bridge</b>",
-  "",
-  `${formatTelegramCommandEmojiPrefix("start")}/start — Open menu / Pair bridge`,
-  `${formatTelegramCommandEmojiPrefix("compact")}/compact — Compact current session`,
-  `${formatTelegramCommandEmojiPrefix("next")}/next — Force next turn`,
-  `${formatTelegramCommandEmojiPrefix("continue")}/continue — Queue continue prompt`,
-  `${formatTelegramCommandEmojiPrefix("abort")}/abort — Abort π`,
-  `${formatTelegramCommandEmojiPrefix("stop")}/stop — Abort π & Clear queue`,
-].join("\n");
+  export const TELEGRAM_APP_MENU_INTRO_HTML = `<b>π Telegram bridge</b> — <code>/list</code> for commands`;
 
 function escapeTelegramCommandMenuHtml(text: string): string {
   return text
@@ -576,7 +606,7 @@ function buildTelegramPromptTemplateMenuHtml(
 ): string {
   if (promptTemplates.length === 0) return "";
   return promptTemplates
-    .map((template) => `🧩 /${escapeTelegramCommandMenuHtml(template.command)}`)
+    .map((template) => `[P] /${escapeTelegramCommandMenuHtml(template.command)}`)
     .join("\n");
 }
 
@@ -1059,19 +1089,25 @@ async function handleTelegramCommandRuntime<
       },
       handleRestart: async (nextMessage, commandCtx) => {
         const sendToRestart = sendReplyFor(nextMessage);
-        let costStr = "$?.???";
+        let fullCost = 0;
+        let totalTokensIn = 0;
+        let totalTokensOut = 0;
+        let sessionTurns = 0;
         let sm;
         try {
           const ctxAny = commandCtx;
           sm = ctxAny["sessionManager"];
           if (sm && typeof sm.getEntries === "function") {
             const entries = sm.getEntries();
-            let total = 0;
             for (const e of entries) {
               const c = e.message?.usage?.cost?.total;
-              if (typeof c === "number") total += c;
+              if (typeof c === "number") fullCost += c;
+              const p = e.message?.usage?.input;
+              if (typeof p === "number") totalTokensIn += p;
+              const co = e.message?.usage?.output;
+              if (typeof co === "number") totalTokensOut += co;
             }
-            costStr = total.toFixed(4);
+            sessionTurns = entries.filter((e) => e.type === "message").length;
             // AAAK context summary - single line, one msg length
             try {
               let lastMsg = "";
@@ -1081,21 +1117,31 @@ async function handleTelegramCommandRuntime<
                   if (txt) { lastMsg = txt.slice(0, 80); break; }
                 }
               }
-              const msgCount = entries.filter((e) => e.type === "message").length;
-              let summary = `turns=${msgCount}|cost=${costStr}`;
+              const detailed = `turns=${sessionTurns}|cost=${fullCost.toFixed(4)}|in=${totalTokensIn}|out=${totalTokensOut}`;
+              let summary = detailed;
               if (lastMsg) summary += `|last=${lastMsg}`;
               fs.writeFileSync("/tmp/pi-telegram-context-summary", summary, "utf-8");
             } catch {}
           }
         } catch {}
         try { fs.writeFileSync("/tmp/pi-force-new-session", "1", "utf-8"); } catch {}
-        try { fs.writeFileSync("/tmp/pi-telegram-restart-marker", costStr, "utf-8"); } catch {}
-        await sendToRestart(`🔄 Restarting pi-telegram...\n\n📊 Previous session cost: ${costStr}\n✅ Fresh session starting - cost reset to $0.0000`);
-        setTimeout(() => {
-          try {
-            execSync("systemctl --user restart pi-telegram", { timeout: 5000 });
-          } catch {}
-        }, 1000);
+        try { fs.writeFileSync("/tmp/pi-telegram-restart-marker", fullCost.toFixed(4), "utf-8"); } catch {}
+        const costLine = `[*] Cost: $${fullCost.toFixed(4)}`;
+        const tokenLine = totalTokensIn || totalTokensOut
+          ? `[*] Tokens: \u2193${totalTokensIn.toLocaleString()} \u2191${totalTokensOut.toLocaleString()}`
+          : "";
+        const turnLine = `[*] Turns: ${sessionTurns}`;
+        const body = [costLine, tokenLine, turnLine].filter(Boolean).join("\n");
+        try {
+          const markerJson = JSON.stringify({ cost: fullCost.toFixed(4), tokensIn: totalTokensIn, tokensOut: totalTokensOut, turns: sessionTurns, ts: new Date().toISOString() });
+          fs.writeFileSync("/tmp/pi-telegram-restart-marker.json", markerJson, "utf-8");
+        } catch {}
+        Promise.resolve(sendToRestart(`[R] Restarting pi-telegram...\n\n${body}\n[*] Fresh session started - cost reset to $0.0000`))
+          .catch(() => {})
+          .finally(() => {
+            setTimeout(() => process.exit(0), 5000);
+          });
+        setTimeout(() => process.exit(0), 8000);
       },
       handleThinking: async (nextMessage, commandCtx) => {
         await deps.openThinkingMenu(nextMessage, commandCtx);

@@ -104,7 +104,7 @@ export interface TelegramSettingsMenuRuntimeDeps<
   ) => Promise<void>;
 }
 
-export const SETTINGS_MENU_TITLE = "<b>⚙️ Settings:</b>";
+export const SETTINGS_MENU_TITLE = "<b>[*] Settings:</b>";
 export const PROACTIVE_PUSH_SETTINGS_TITLE = "<b>Proactive push:</b>";
 
 export function buildTelegramSettingsMenuText(): string {
@@ -123,23 +123,18 @@ export function buildTelegramSettingsMenuReplyMarkup(
   proactivePushEnabled: boolean,
   sectionRegistry?: TelegramSectionRegistry,
 ): TelegramSettingsMenuReplyMarkup {
-  const rows: Array<Array<{ text: string; callback_data: string }>> = [
-    [{ text: "⬆️ Main menu", callback_data: "menu:back" }],
-  ];
-  // Extension settings rows before built-in controls
-  if (sectionRegistry) {
-    const settingsRows = getTelegramExtensionSettingsRows(sectionRegistry);
-    for (const row of settingsRows) {
-      rows.push([{ text: row.label, callback_data: row.callback_data }]);
-    }
-  }
-  rows.push([
-    {
-      text: `${proactivePushEnabled ? "🟢" : "⚫️"} Proactive push`,
-      callback_data: "settings:open:proactive",
-    },
-  ]);
-  return { inline_keyboard: rows };
+  return {
+    inline_keyboard: [
+      [{ text: "[^] Main menu", callback_data: "menu:back" }],
+      [
+        {
+          text: `${proactivePushEnabled ? "[*]" : "[ ]"} Proactive push`,
+          callback_data: "settings:open:proactive",
+        },
+      ],
+    ],
+  };
+
 }
 
 export async function openTelegramSettingsMenu<
@@ -168,14 +163,14 @@ export function buildProactivePushSettingsReplyMarkup(
 ): TelegramSettingsMenuReplyMarkup {
   return {
     inline_keyboard: [
-      [{ text: "⬆️ Back", callback_data: "settings:list" }],
+      [{ text: "[^] Back", callback_data: "settings:list" }],
       [
         {
-          text: proactivePushEnabled ? "🟢 On" : "⚫️ On",
+          text: proactivePushEnabled ? "[*] On" : "[ ] On",
           callback_data: "settings:set:proactive:on",
         },
         {
-          text: proactivePushEnabled ? "⚫️ Off" : "🟡 Off",
+          text: proactivePushEnabled ? "[ ] Off" : "[*] Off",
           callback_data: "settings:set:proactive:off",
         },
       ],

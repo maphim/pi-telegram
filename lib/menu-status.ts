@@ -172,7 +172,7 @@ export function buildStatusReplyMarkup(
   }
   rows.push([
     {
-      text: `${queueItemCount === 0 ? "⌛" : "⏳"} Queue: ${queueItemCount}`,
+      text: `[Q] Queue: ${queueItemCount}`,
       callback_data: "menu:queue",
     },
   ]);
@@ -185,7 +185,7 @@ export function buildStatusReplyMarkup(
   }
   rows.push([
     {
-      text: "⚙️ Settings",
+      text: "[*] Settings",
       callback_data: "menu:settings",
     },
   ]);

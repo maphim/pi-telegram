@@ -109,17 +109,17 @@ export async function handleTelegramThinkingMenuCallbackAction(
 }
 
 export function buildThinkingMenuText(): string {
-  return "<b>🧠 Choose a thinking level:</b>";
+  return "<b>[T] Choose a thinking level:</b>";
 }
 
 export function buildThinkingMenuReplyMarkup(
   currentThinkingLevel: ThinkingLevel,
 ): TelegramReplyMarkup {
-  const rows = [[{ text: "⬆️ Main menu", callback_data: "menu:back" }]];
+  const rows = [[{ text: "[^] Main menu", callback_data: "menu:back" }]];
   rows.push(
     ...THINKING_LEVELS.map((level) => [
       {
-        text: level === currentThinkingLevel ? `🟢 ${level}` : level,
+        text: level === currentThinkingLevel ? `[*] ${level}` : level,
         callback_data: `thinking:set:${level}`,
       },
     ]),

@@ -67,9 +67,9 @@ export function formatTelegramTurnStatusSummary(
     const fileName = basename(
       files[0]?.fileName || files[0]?.path || "attachment",
     );
-    return `📎 ${truncateTelegramQueueSummary(fileName, 4, 32) || "attachment"}`;
+    return `[+] ${truncateTelegramQueueSummary(fileName, 4, 32) || "attachment"}`;
   }
-  if (files.length > 1) return `📎 ${files.length} attachments`;
+  if (files.length > 1) return `[+] ${files.length} attachments`;
   return "(empty message)";
 }
 
