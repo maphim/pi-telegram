@@ -271,6 +271,7 @@ export const TELEGRAM_RESERVED_COMMAND_NAMES = [
   "compact",
   "model",
   "thinking",
+  "restart",
   "help",
   "start",
 ] as const;
@@ -658,6 +659,7 @@ export const TELEGRAM_COMMAND_ACTIONS = {
   compact: { kind: "compact", executionMode: "immediate" },
   model: { kind: "model", executionMode: "immediate" },
   thinking: { kind: "thinking", executionMode: "immediate" },
+  restart: { kind: "restart", executionMode: "immediate" },
   help: { kind: "help", commandName: "help", executionMode: "immediate" },
   start: { kind: "help", commandName: "start", executionMode: "immediate" },
 } as const satisfies Record<TelegramReservedCommandName, TelegramCommandAction>;
