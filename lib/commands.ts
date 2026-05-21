@@ -866,6 +866,9 @@ export async function executeTelegramCommandAction<TMessage, TContext>(
     case "thinking":
       await deps.handleThinking(message, ctx);
       return true;
+    case "restart":
+      await deps.handleRestart(message, ctx);
+      return true;
     case "help":
       await deps.handleHelp(message, action.commandName, ctx);
       return true;
@@ -1095,35 +1098,23 @@ async function handleTelegramCommandRuntime<
         let totalTokensIn = 0;
         let totalTokensOut = 0;
         let sessionTurns = 0;
-        let sm;
         try {
-          const ctxAny = commandCtx;
-          sm = ctxAny["sessionManager"];
+          const ctxAny = commandCtx as Record<string, unknown>;
+          const sm = ctxAny["sessionManager"] as { getEntries?: () => unknown[] } | undefined;
           if (sm && typeof sm.getEntries === "function") {
             const entries = sm.getEntries();
             for (const e of entries) {
-              const c = e.message?.usage?.cost?.total;
+              const msg = (e as Record<string, unknown>)["message"] as Record<string, unknown> | undefined;
+              const usage = msg?.["usage"] as Record<string, unknown> | undefined;
+              const cost = usage?.["cost"] as Record<string, unknown> | undefined;
+              const c = cost?.["total"];
               if (typeof c === "number") fullCost += c;
-              const p = e.message?.usage?.input;
+              const p = usage?.["input"];
               if (typeof p === "number") totalTokensIn += p;
-              const co = e.message?.usage?.output;
+              const co = usage?.["output"];
               if (typeof co === "number") totalTokensOut += co;
             }
-            sessionTurns = entries.filter((e) => e.type === "message").length;
-            // AAAK context summary - single line, one msg length
-            try {
-              let lastMsg = "";
-              for (const e of entries.slice().reverse()) {
-                if (e.type === "message" && e.message?.role === "user" && Array.isArray(e.message.content)) {
-                  const txt = e.message.content.map((c) => c.text ?? "").filter(Boolean).join(" ").replace(/[|\n]/g, " ").trim();
-                  if (txt) { lastMsg = txt.slice(0, 80); break; }
-                }
-              }
-              const detailed = `turns=${sessionTurns}|cost=${fullCost.toFixed(4)}|in=${totalTokensIn}|out=${totalTokensOut}`;
-              let summary = detailed;
-              if (lastMsg) summary += `|last=${lastMsg}`;
-              fs.writeFileSync("/tmp/pi-telegram-context-summary", summary, "utf-8");
-            } catch {}
+            sessionTurns = entries.filter((e) => (e as Record<string, unknown>)["type"] === "message").length;
           }
         } catch {}
         try { fs.writeFileSync("/tmp/pi-force-new-session", "1", "utf-8"); } catch {}
@@ -1134,16 +1125,8 @@ async function handleTelegramCommandRuntime<
           : "";
         const turnLine = `[*] Turns: ${sessionTurns}`;
         const body = [costLine, tokenLine, turnLine].filter(Boolean).join("\n");
-        try {
-          const markerJson = JSON.stringify({ cost: fullCost.toFixed(4), tokensIn: totalTokensIn, tokensOut: totalTokensOut, turns: sessionTurns, ts: new Date().toISOString() });
-          fs.writeFileSync("/tmp/pi-telegram-restart-marker.json", markerJson, "utf-8");
-        } catch {}
-        Promise.resolve(sendToRestart(`[R] Restarting pi-telegram...\n\n${body}\n[*] Fresh session started - cost reset to $0.0000`))
-          .catch(() => {})
-          .finally(() => {
-            setTimeout(() => process.exit(0), 5000);
-          });
-        setTimeout(() => process.exit(0), 8000);
+        sendToRestart(`[R] Restarting pi-telegram...\n\n${body}\n[*] Fresh session started - cost reset to $0.0000`).catch(() => {});
+        setTimeout(() => process.exit(0), 3000);
       },
       handleThinking: async (nextMessage, commandCtx) => {
         await deps.openThinkingMenu(nextMessage, commandCtx);
