@@ -1125,8 +1125,8 @@ async function handleTelegramCommandRuntime<
           : "";
         const turnLine = `[*] Turns: ${sessionTurns}`;
         const body = [costLine, tokenLine, turnLine].filter(Boolean).join("\n");
-        sendToRestart(`[R] Restarting pi-telegram...\n\n${body}\n[*] Fresh session started - cost reset to $0.0000`).catch(() => {});
-        setTimeout(() => process.exit(0), 3000);
+        try { await sendToRestart(`[R] Restarting pi-telegram...\n\n— Previous session —\n${body}\n— New session —\n[*] Cost: $0.0000`); } catch {}
+        setTimeout(() => process.exit(0), 500);
       },
       handleThinking: async (nextMessage, commandCtx) => {
         await deps.openThinkingMenu(nextMessage, commandCtx);
