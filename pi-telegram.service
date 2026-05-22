@@ -1,0 +1,18 @@
+[Unit]
+Description=Pi coding agent Telegram bridge (auto-resume)
+Documentation=https://github.com/llblab/pi-telegram
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=20
+
+[Service]
+Type=simple
+Environment=PI_SKIP_VERSION_CHECK=1
+ExecStart=/home/anhnc/.pi/telegram-wrapper.sh
+ExecStop=/bin/bash -c "rm -f /home/anhnc/.pi/agent/locks.json"
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target
