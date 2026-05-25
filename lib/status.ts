@@ -557,11 +557,25 @@ function buildStatusSummary(ctx: TelegramStatusContext): string {
   return "unknown";
 }
 
+import { existsSync, unlinkSync } from "node:fs";
+
+const COST_RESET_FILE = "/tmp/pi-telegram-cost-zero";
+
+function isCostResetActive(): boolean {
+  if (existsSync(COST_RESET_FILE)) {
+    try { unlinkSync(COST_RESET_FILE); } catch {}
+    return true;
+  }
+  return false;
+}
+
 export function buildStatusHtml(
   ctx: TelegramStatusContext,
   activeModel: TelegramStatusActiveModel | undefined,
 ): string {
-  const stats = collectUsageStats(ctx);
+  const stats = isCostResetActive()
+    ? { totalInput: 0, totalOutput: 0, totalCacheRead: 0, totalCacheWrite: 0, totalCost: 0 }
+    : collectUsageStats(ctx);
   const usesSubscription = activeModel
     ? ctx.modelRegistry.isUsingOAuth(activeModel)
     : false;

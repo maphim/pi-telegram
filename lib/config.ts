@@ -33,12 +33,15 @@ export interface TelegramOutboundHandlerConfig extends CommandTemplateObjectConf
   timeout?: number;
 }
 
+export const TELEGRAM_DEFAULT_REMEMBER_REACTION_EMOJI = "👌";
+
 export interface TelegramConfig {
   botToken?: string;
   botUsername?: string;
   botId?: number;
   allowedUserId?: number;
   lastUpdateId?: number;
+  rememberReactionEmoji?: string;
   inboundHandlers?: TelegramInboundHandlerConfig[];
   attachmentHandlers?: TelegramInboundHandlerConfig[];
   outboundHandlers?: TelegramOutboundHandlerConfig[];
@@ -54,6 +57,7 @@ export interface TelegramConfigStore {
   getInboundHandlers: () => TelegramInboundHandlerConfig[] | undefined;
   getAttachmentHandlers: () => TelegramInboundHandlerConfig[] | undefined;
   getOutboundHandlers: () => TelegramOutboundHandlerConfig[] | undefined;
+  getRememberReactionEmoji: () => string;
   setAllowedUserId: (userId: number) => void;
   load: () => Promise<void>;
   persist: (config?: TelegramConfig) => Promise<void>;
@@ -112,6 +116,8 @@ export function createTelegramConfigStore(
     ],
     getAttachmentHandlers: () => config.attachmentHandlers,
     getOutboundHandlers: () => config.outboundHandlers,
+    getRememberReactionEmoji: () =>
+      config.rememberReactionEmoji ?? TELEGRAM_DEFAULT_REMEMBER_REACTION_EMOJI,
     setAllowedUserId: (userId) => {
       config.allowedUserId = userId;
     },

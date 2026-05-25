@@ -26,6 +26,8 @@ export type TelegramReactionType =
   | TelegramReactionTypeEmoji
   | TelegramReactionTypeNonEmoji;
 
+export const TELEGRAM_DEFAULT_REMEMBER_REACTION_EMOJI = "👌";
+
 export const TELEGRAM_PRIORITY_REACTIONS = [
   { id: 10, name: "like", emoji: "👍" },
   { id: 11, name: "lightning", emoji: "⚡" },
@@ -446,6 +448,12 @@ export interface TelegramUpdateRuntimeControllerDeps<
     message: TMessage,
     ctx: TContext,
   ) => unknown;
+  getRememberReactionEmoji?: () => string;
+  onRememberReaction?: (
+    chatId: number,
+    messageId: number,
+    ctx: TContext,
+  ) => Promise<void>;
 }
 
 export interface TelegramUpdateRuntimeController<
@@ -540,6 +548,8 @@ export function createTelegramPairedUpdateRuntime<
     handleAuthorizedTelegramMessage: deps.handleAuthorizedTelegramMessage,
     handleAuthorizedTelegramEditedMessage:
       deps.handleAuthorizedTelegramEditedMessage,
+    getRememberReactionEmoji: deps.getRememberReactionEmoji,
+    onRememberReaction: deps.onRememberReaction,
   });
 }
 
@@ -567,6 +577,8 @@ export function createTelegramUpdateRuntime<
         deps.clearQueuedTelegramTurnPriorityByMessageId,
       prioritizeQueuedTelegramTurnByMessageId:
         deps.prioritizeQueuedTelegramTurnByMessageId,
+      getRememberReactionEmoji: deps.getRememberReactionEmoji,
+      onRememberReaction: deps.onRememberReaction,
     });
   };
   return {
@@ -607,6 +619,12 @@ export interface AuthorizedTelegramReactionUpdateDeps<TContext> {
     ctx: TContext,
     priorityEmoji?: string,
   ) => boolean;
+  getRememberReactionEmoji?: () => string;
+  onRememberReaction?: (
+    chatId: number,
+    messageId: number,
+    ctx: TContext,
+  ) => Promise<void>;
 }
 
 export async function handleAuthorizedTelegramReactionUpdate<TContext>(
@@ -657,12 +675,32 @@ export async function handleAuthorizedTelegramReactionUpdate<TContext>(
     newEmojis,
     TELEGRAM_PRIORITY_REACTION_EMOJIS,
   );
-  if (!addedPriorityEmoji) return;
-  deps.prioritizeQueuedTelegramTurnByMessageId(
-    reactionUpdate.message_id,
-    deps.ctx,
-    addedPriorityEmoji,
-  );
+  if (addedPriorityEmoji) {
+    deps.prioritizeQueuedTelegramTurnByMessageId(
+      reactionUpdate.message_id,
+      deps.ctx,
+      addedPriorityEmoji,
+    );
+  }
+  // Check for remember reaction (separate from priority)
+  const rememberEmoji = deps.getRememberReactionEmoji?.() ??
+    TELEGRAM_DEFAULT_REMEMBER_REACTION_EMOJI;
+  const normalizedRememberEmoji =
+    normalizeTelegramReactionEmoji(rememberEmoji);
+  if (
+    deps.onRememberReaction &&
+    hasAddedTelegramReactionEmoji(
+      oldEmojis,
+      newEmojis,
+      [normalizedRememberEmoji],
+    )
+  ) {
+    await deps.onRememberReaction(
+      reactionUpdate.chat.id,
+      reactionUpdate.message_id,
+      deps.ctx,
+    );
+  }
 }
 
 export async function executeTelegramUpdatePlan<

@@ -17,6 +17,7 @@ import type { TelegramBridgeRuntime } from "./runtime.ts";
 import * as TextGroups from "./text-groups.ts";
 import * as Turns from "./turns.ts";
 import * as Updates from "./updates.ts";
+import * as Api from "./api.ts";
 
 export type TelegramRoutedMessage = Updates.TelegramUpdateMessage &
   Media.TelegramMediaMessage &
@@ -35,7 +36,7 @@ export interface TelegramInboundRouteRuntimeDeps<
 > {
   configStore: Pick<
     TelegramConfigStore,
-    "getAllowedUserId" | "setAllowedUserId" | "persist"
+    "getAllowedUserId" | "setAllowedUserId" | "persist" | "getRememberReactionEmoji"
   >;
   bridgeRuntime: TelegramBridgeRuntime;
   activeTurnRuntime: Queue.TelegramActiveTurnStore;
@@ -77,6 +78,7 @@ export interface TelegramInboundRouteRuntimeDeps<
     typeof PromptTemplates.getTelegramPromptTemplateCommands
   >[0];
   downloadFile: Media.DownloadTelegramMessageFilesDeps["downloadFile"];
+  getChatMessage: (chatId: number, messageId: number) => Promise<Api.TelegramMessage>;
   getThinkingLevel: () => Model.ThinkingLevel;
   setThinkingLevel: (level: Model.ThinkingLevel) => void;
   setModel: (model: TModel) => Promise<boolean>;
@@ -338,6 +340,29 @@ export function createTelegramInboundRouteRuntime<
     ...deps.telegramQueueStore,
     updateStatus: deps.updateStatus,
   });
+  // Remember reaction handler: fetch message + queue to pi via sendUserMessage
+  const handleRememberReaction = async (
+    chatId: number,
+    messageId: number,
+    ctx: TContext,
+  ): Promise<void> => {
+    if (!deps.sendUserMessage) return;
+    try {
+      const message = await deps.getChatMessage(chatId, messageId);
+      const content = message.text || message.caption || "";
+      if (content) {
+        deps.sendUserMessage(
+          `[telegram] 👌 Yêu cầu lưu:\n${content}`,
+        );
+      }
+    } catch (error) {
+      deps.recordRuntimeEvent?.("remember-reaction", error, {
+        chatId,
+        messageId,
+      });
+    }
+  };
+
   return Updates.createTelegramPairedUpdateRuntime<TContext, TUpdate>({
     getAllowedUserId: deps.configStore.getAllowedUserId,
     setAllowedUserId: deps.configStore.setAllowedUserId,
@@ -355,5 +380,7 @@ export function createTelegramInboundRouteRuntime<
     sendTextReply: deps.sendTextReply,
     handleAuthorizedTelegramMessage: textDispatch.handleMessage,
     handleAuthorizedTelegramEditedMessage: editRuntime.updateFromEditedMessage,
+    getRememberReactionEmoji: deps.configStore.getRememberReactionEmoji,
+    onRememberReaction: handleRememberReaction,
   });
 }

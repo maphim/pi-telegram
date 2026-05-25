@@ -132,6 +132,7 @@ export default function (pi: Pi.ExtensionAPI) {
     editMessageText: editTelegramMessageText,
     answerCallbackQuery,
     prepareTempDir,
+    getChatMessage,
   } = Api.createDefaultTelegramBridgeApiRuntime({
     getBotToken: configStore.getBotToken,
     recordRuntimeEvent,
@@ -305,6 +306,7 @@ export default function (pi: Pi.ExtensionAPI) {
     setMyCommands,
     getCommands,
     downloadFile: downloadTelegramBridgeFile,
+    getChatMessage,
     getThinkingLevel,
     setThinkingLevel,
     setModel,
