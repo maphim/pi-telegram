@@ -11,6 +11,47 @@ import {
   type TelegramUserPairingRuntimeDeps,
 } from "./config.ts";
 
+// --- Message content cache (used for remember reaction)
+// Stores message text/caption when messages arrive via polling.
+// Looked up when a remember (👌) reaction is detected.
+const telegramMessageContentCache = new Map<string, string>();
+
+function getTelegramMessageCacheKey(
+  chatId: number,
+  messageId: number,
+): string {
+  return `${chatId}:${messageId}`;
+}
+
+/**
+ * Store a message's text content for later retrieval by the remember reaction handler.
+ */
+export function cacheTelegramMessageContent(
+  chatId: number,
+  messageId: number,
+  content: string,
+): void {
+  if (content) {
+    telegramMessageContentCache.set(
+      getTelegramMessageCacheKey(chatId, messageId),
+      content,
+    );
+  }
+}
+
+/**
+ * Retrieve cached message content (text/caption) for a given message.
+ * Returns undefined if the message content was not cached (e.g., received before bot started).
+ */
+export function getCachedTelegramMessageContent(
+  chatId: number,
+  messageId: number,
+): string | undefined {
+  return telegramMessageContentCache.get(
+    getTelegramMessageCacheKey(chatId, messageId),
+  );
+}
+
 // --- Extraction ---
 
 export interface TelegramReactionTypeEmoji {
@@ -181,7 +222,7 @@ export function getAuthorizedTelegramEditedMessage(
 // --- Flow ---
 
 export interface TelegramMessageReactionUpdated {
-  chat: { type: string };
+  chat: { id?: number; type: string };
   user?: TelegramUser;
   message_id: number;
   old_reaction: TelegramReactionType[];
@@ -696,7 +737,7 @@ export async function handleAuthorizedTelegramReactionUpdate<TContext>(
     )
   ) {
     await deps.onRememberReaction(
-      reactionUpdate.chat.id,
+      reactionUpdate.chat.id!,
       reactionUpdate.message_id,
       deps.ctx,
     );
@@ -752,6 +793,17 @@ export async function executeTelegramUpdatePlan<
     ? await deps.pairTelegramUserIfNeeded(plan.message.from.id, deps.ctx)
     : false;
   const replyTarget = getTelegramMessageReplyTarget(plan.message);
+  // Cache message content for potential remember (👌) reaction
+  const msg = plan.message as unknown as Record<string, unknown>;
+  const content =
+    typeof msg.text === "string"
+      ? msg.text
+      : typeof msg.caption === "string"
+        ? (msg.caption as string)
+        : "";
+  if (content && plan.message.chat.id) {
+    cacheTelegramMessageContent(plan.message.chat.id, plan.message.message_id!, content);
+  }
   if (
     plan.kind === "message" &&
     pairedNow &&

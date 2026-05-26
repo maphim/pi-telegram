@@ -17,7 +17,7 @@ import type { TelegramBridgeRuntime } from "./runtime.ts";
 import * as TextGroups from "./text-groups.ts";
 import * as Turns from "./turns.ts";
 import * as Updates from "./updates.ts";
-import * as Api from "./api.ts";
+
 
 export type TelegramRoutedMessage = Updates.TelegramUpdateMessage &
   Media.TelegramMediaMessage &
@@ -78,7 +78,6 @@ export interface TelegramInboundRouteRuntimeDeps<
     typeof PromptTemplates.getTelegramPromptTemplateCommands
   >[0];
   downloadFile: Media.DownloadTelegramMessageFilesDeps["downloadFile"];
-  getChatMessage: (chatId: number, messageId: number) => Promise<Api.TelegramMessage>;
   getThinkingLevel: () => Model.ThinkingLevel;
   setThinkingLevel: (level: Model.ThinkingLevel) => void;
   setModel: (model: TModel) => Promise<boolean>;
@@ -340,26 +339,25 @@ export function createTelegramInboundRouteRuntime<
     ...deps.telegramQueueStore,
     updateStatus: deps.updateStatus,
   });
-  // Remember reaction handler: fetch message + queue to pi via sendUserMessage
+  // Remember reaction handler: look up cached message content + queue to pi
   const handleRememberReaction = async (
     chatId: number,
     messageId: number,
     ctx: TContext,
   ): Promise<void> => {
     if (!deps.sendUserMessage) return;
-    try {
-      const message = await deps.getChatMessage(chatId, messageId);
-      const content = message.text || message.caption || "";
-      if (content) {
+    const content = Updates.getCachedTelegramMessageContent(chatId, messageId);
+    if (content) {
+      try {
         deps.sendUserMessage(
           `[telegram] 👌 Yêu cầu lưu:\n${content}`,
         );
+      } catch (error) {
+        deps.recordRuntimeEvent?.("remember-reaction", error, {
+          chatId,
+          messageId,
+        });
       }
-    } catch (error) {
-      deps.recordRuntimeEvent?.("remember-reaction", error, {
-        chatId,
-        messageId,
-      });
     }
   };
 

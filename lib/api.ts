@@ -324,7 +324,6 @@ export interface TelegramBridgeApiRuntime {
     options?: { parseMode?: string },
   ) => Promise<void>;
   deleteMessage: (chatId: number, messageId: number) => Promise<void>;
-  getChatMessage: (chatId: number, messageId: number) => Promise<TelegramMessage>;
   prepareTempDir: () => Promise<number>;
 }
 
@@ -839,11 +838,6 @@ export function createTelegramBridgeApiRuntime(
         chat_id: chatId,
         message_id: messageId,
       }).then(() => {}),
-    getChatMessage: (chatId, messageId) =>
-      callRecorded<TelegramMessage>("getChatMessage", {
-        chat_id: chatId,
-        message_id: messageId,
-      }),
   };
 }
 
