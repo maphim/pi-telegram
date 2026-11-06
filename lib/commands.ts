@@ -74,6 +74,28 @@ export const TELEGRAM_BUILTIN_BOT_COMMANDS: readonly TelegramBotCommandDefinitio
       ),
     },
     {
+      command: "status",
+      description: formatTelegramBotCommandDescription(
+        "status",
+        "Model, context tokens, cost",
+      ),
+    },
+    {
+      command: "model",
+      description: formatTelegramBotCommandDescription("model", "Choose model"),
+    },
+    {
+      command: "thinking",
+      description: formatTelegramBotCommandDescription(
+        "thinking",
+        "Thinking level",
+      ),
+    },
+    {
+      command: "queue",
+      description: formatTelegramBotCommandDescription("queue", "Show queue"),
+    },
+    {
       command: "compact",
       description: formatTelegramBotCommandDescription(
         "compact",
@@ -111,6 +133,10 @@ export const TELEGRAM_BUILTIN_BOT_COMMANDS: readonly TelegramBotCommandDefinitio
         "restart",
         "Restart Telegram bridge",
       ),
+    },
+    {
+      command: "help",
+      description: "Show available commands",
     },
   ];
 

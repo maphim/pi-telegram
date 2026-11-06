@@ -124,6 +124,16 @@ test("Command helpers register Telegram bot commands through deps", async () => 
   assert.deepEqual(calls, [TELEGRAM_BOT_COMMANDS, TELEGRAM_BOT_COMMANDS]);
 });
 
+test("Bot command menu exposes the bridge-served commands", () => {
+  const names = TELEGRAM_BOT_COMMANDS.map((entry) => entry.command);
+  for (const expected of ["status", "model", "thinking", "queue", "help"]) {
+    assert.ok(
+      names.includes(expected),
+      `bot menu must expose /${expected} so the owner can pick it from the list`,
+    );
+  }
+});
+
 test("Command helpers register pi setup and status commands", async () => {
   const harness = createCommandRegistrationApiHarness();
   const events: string[] = [];

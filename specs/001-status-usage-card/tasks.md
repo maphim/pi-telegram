@@ -11,4 +11,7 @@ Check chung (floor): `npx tsc --noEmit` (file sửa 0 lỗi) + `node --experimen
 - [x] **2.2 Sabotage** — bỏ dấu phẩy ngăn nghìn → test FAIL; bỏ row Model → test FAIL (chứng minh test bắt bug). Khôi phục.
 - [x] **3.1** Release: `package.json` 0.11.0 + `CHANGELOG.md` entry — check: `npm pack --dry-run` OK.
 - [x] **4.1** Full check xanh → commit → ff-merge `main` → push → `systemctl --user restart pi-telegram`.
+- [x] **5.1** Đăng ký `status/model/thinking/queue/help` vào `TELEGRAM_BUILTIN_BOT_COMMANDS` — check: test `Bot command menu exposes the bridge-served commands` pass.
+- [x] **5.2 Sabotage** bỏ entry `status` → test FAIL (8 fail), khôi phục 19/7 (7 fail pre-existing).
+- [ ] **5.3** Live: sau restart mở menu Telegram phải thấy `/status` (chờ anh xác nhận).
 - [ ] **4.2** Smoke live: `/status` trên Telegram trả đủ model + tokens + % + cost (bằng chứng log/ảnh).

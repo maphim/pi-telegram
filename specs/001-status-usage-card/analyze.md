@@ -34,3 +34,15 @@ Khôi phục → 15/15 pass. Không có test nào "pass-ảo" (mỗi hành vi đ
 1. `TelegramContextUsage.tokens` để optional — π truyền `tokens: number | null`; `null` (ngay sau compact) hiển thị `?` thay vì số 0 giả.
 2. `TelegramStatusActiveModel` thêm `provider/id` optional — model undefined (session chưa chọn) thì bỏ row Model, không in `undefined`.
 3. US2 (menu /model chi tiết) giữ out-of-scope — cần plumb usage qua `buildState` ctx tối thiểu, làm spec riêng khi chủ yêu cầu.
+
+## Appendix (2026-11-07): menu đăng ký lệnh — FR-007
+
+Chủ phát hiện sau khi ship: `/status` chạy được nhưng không có trong menu `/` của bot
+(`setMyCommands` chỉ đăng ký start/compact/next/continue/abort/stop/restart).
+
+- Thêm `status, model, thinking, queue, help` vào `TELEGRAM_BUILTIN_BOT_COMMANDS`.
+- Test mới `Bot command menu exposes the bridge-served commands`; sabotage bỏ `status`
+  → FAIL (8 fail), khôi phục 19 pass / 7 fail pre-existing.
+- Full suite: **464 pass / 40 fail** (504 tests, +1 test mới, danh sách fail pre-existing không đổi).
+- Lưu ý: test `Command helpers expose Telegram bot command definitions` vẫn nằm trong nhóm
+  fail pre-existing (source đã chuyển emoji ASCII, test chưa cập nhật) — ngoài phạm vi spec này.

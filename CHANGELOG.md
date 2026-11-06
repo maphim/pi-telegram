@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.1: Bot Command Menu Completeness
+
+- `[Commands]` The Telegram command menu (`setMyCommands`) now registers the bridge-served commands `status`, `model`, `thinking`, `queue`, and `help` next to the existing start/compact/next/continue/abort/stop/restart entries. Impact: the owner can pick `/status` (model + context tokens + cost) straight from the client slash menu instead of typing it by hand.
+
 ## 0.11.0: Opencode-Style Model Usage Card
 
 - `[Status]` Telegram `/status` now opens with a `Model` row (`provider/id`) and the `Context` row reports the exact token count with the used percentage and window (`140,398 tokens (13.4% used of 1.0M)`) instead of only `13.4%/1.0M`. Impact: checking which model is running now shows what it is and how much of its window is consumed in a single reply, matching the opencode context card; compacted/unknown values stay honest (`?` / `unknown`).
