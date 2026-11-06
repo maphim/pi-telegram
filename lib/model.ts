@@ -259,6 +259,103 @@ export function getCanonicalModelId(
   return `${model.provider}/${model.id}`;
 }
 
+// --- Provider-error auto fallback ---
+
+/**
+ * True when a terminal turn error is the PROVIDER's fault (retired model,
+ * HTTP status errors, rate limits, transport failures) — situations where
+ * staying on the same model would keep failing. User aborts and context
+ * overflow are NOT provider failures: switching models would hide real bugs.
+ */
+export function isProviderServerModelError(errorMessage: string): boolean {
+  if (!errorMessage) return false;
+  if (
+    /aborted|context (?:length|window)|maximum context|token limit/i.test(
+      errorMessage,
+    )
+  ) {
+    return false;
+  }
+  return (
+    /\b410\b/.test(errorMessage) ||
+    /\b\d{3} status code\b/.test(errorMessage) ||
+    /timeout|timed out|ETIMEDOUT|ECONNRESET|ENOTFOUND|EAI_AGAIN|fetch failed|socket hang up|UND_ERR|network|overloaded|rate limit/i.test(
+      errorMessage,
+    )
+  );
+}
+
+export interface TelegramModelFallbackContext<
+  TModel extends MenuModel = MenuModel,
+> {
+  cwd: string;
+  modelRegistry: {
+    refresh: () => void;
+    getAvailable: () => TModel[];
+  };
+}
+
+export interface TelegramModelFallbackRuntimeDeps<
+  TModel extends MenuModel = MenuModel,
+  TCtx extends TelegramModelFallbackContext<TModel> = TelegramModelFallbackContext<TModel>,
+> {
+  getActiveModel: (ctx: TCtx) => TModel | undefined;
+  createSettingsManager: (cwd: string) => {
+    getEnabledModels: () => string[] | undefined;
+  };
+  setModel: (model: TModel, ctx: TCtx) => Promise<boolean>;
+  setCurrentModel: (model: TModel, ctx: TCtx) => void;
+}
+
+/**
+ * Auto-switch the Telegram-active model when a turn dies on the provider side.
+ *
+ * π core only retries the SAME model (`retry.maxRetries`, exponential backoff)
+ * and never moves to another one, so a dead provider strands every following
+ * turn until the owner opens /model by hand. This runtime walks the
+ * owner-configured enabledModels patterns (menu scope order) starting right
+ * after the active model, applies the first model that pi accepts, and returns
+ * one short Vietnamese sentence to append to the error reply.
+ *
+ * Returns undefined (no switch, raw error untouched) for non-provider errors,
+ * a single-model chain, or when no candidate can be applied.
+ */
+export function createTelegramModelFallbackRuntime<
+  TModel extends MenuModel = MenuModel,
+  TCtx extends TelegramModelFallbackContext<TModel> = TelegramModelFallbackContext<TModel>,
+>(
+  deps: TelegramModelFallbackRuntimeDeps<TModel, TCtx>,
+): (errorMessage: string, ctx: TCtx) => Promise<string | undefined> {
+  return async (errorMessage, ctx) => {
+    if (!isProviderServerModelError(errorMessage)) return undefined;
+    const active = deps.getActiveModel(ctx);
+    if (!active) return undefined;
+    const patterns = deps.createSettingsManager(ctx.cwd).getEnabledModels() ?? [];
+    if (patterns.length < 2) return undefined;
+    ctx.modelRegistry.refresh();
+    const chain = resolveScopedModelPatterns(
+      patterns,
+      ctx.modelRegistry.getAvailable(),
+    );
+    if (chain.length < 2) return undefined;
+    const activeIndex = chain.findIndex((entry) =>
+      modelsMatch(entry.model, active),
+    );
+    const ordered =
+      activeIndex >= 0
+        ? [...chain.slice(activeIndex + 1), ...chain.slice(0, activeIndex)]
+        : chain;
+    for (const entry of ordered) {
+      if (modelsMatch(entry.model, active)) continue;
+      const changed = await deps.setModel(entry.model, ctx);
+      if (changed === false) continue;
+      deps.setCurrentModel(entry.model, ctx);
+      return `🔁 ${getCanonicalModelId(active)} lỗi nhà cung cấp — đã tự chuyển sang ${getCanonicalModelId(entry.model)} cho các turn sau.`;
+    }
+    return undefined;
+  };
+}
+
 export function isThinkingLevel(value: string): value is ThinkingLevel {
   return THINKING_LEVELS.includes(value as ThinkingLevel);
 }

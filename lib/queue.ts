@@ -805,6 +805,15 @@ export interface TelegramAgentEndRuntimeDeps<
     error: unknown,
     details?: Record<string, unknown>,
   ) => void;
+  /**
+   * Provider-error hook, called only right before the error reply is sent.
+   * Returns a sentence to append when a fallback model switch happened; the
+   * queue itself stays model-agnostic (classification lives with the model
+   * domain). Never called for non-error turns.
+   */
+  autoSwitchOnModelError?: (
+    errorMessage: string,
+  ) => Promise<string | undefined> | string | undefined;
 }
 
 export interface TelegramAgentEndHookRuntimeDeps<
@@ -847,6 +856,10 @@ export interface TelegramAgentEndHookRuntimeDeps<
   getDefaultChatId?: TelegramAgentEndRuntimeDeps<TTurn>["getDefaultChatId"];
   isProactivePushEnabled?: TelegramAgentEndRuntimeDeps<TTurn>["isProactivePushEnabled"];
   recordRuntimeEvent?: TelegramAgentEndRuntimeDeps<TTurn>["recordRuntimeEvent"];
+  autoSwitchOnModelError?: (
+    errorMessage: string,
+    ctx: TContext,
+  ) => Promise<string | undefined> | string | undefined;
 }
 
 /**
@@ -989,6 +1002,10 @@ export function createTelegramAgentEndHook<
       getDefaultChatId: deps.getDefaultChatId,
       isProactivePushEnabled: deps.isProactivePushEnabled,
       recordRuntimeEvent: deps.recordRuntimeEvent,
+      autoSwitchOnModelError: deps.autoSwitchOnModelError
+        ? (errorMessage: string) =>
+            deps.autoSwitchOnModelError?.(errorMessage, ctx)
+        : undefined,
     });
   };
 }
@@ -1066,13 +1083,16 @@ export async function handleTelegramAgentEndRuntime<
     await deps.clearPreview(turn.chatId);
   }
   if (endPlan.shouldSendErrorMessage) {
-    await deps.sendTextReply(
-      turn.chatId,
-      turn.replyToMessageId,
-      assistant.errorMessage
-        ? friendlyTurnErrorMessage(assistant.errorMessage)
-        : "Telegram bridge: π failed while processing the request.",
-    );
+    let errorText = assistant.errorMessage
+      ? friendlyTurnErrorMessage(assistant.errorMessage)
+      : "Telegram bridge: π failed while processing the request.";
+    if (assistant.errorMessage && deps.autoSwitchOnModelError) {
+      const fallbackNote = await deps.autoSwitchOnModelError(
+        assistant.errorMessage,
+      );
+      if (fallbackNote) errorText += `\n${fallbackNote}`;
+    }
+    await deps.sendTextReply(turn.chatId, turn.replyToMessageId, errorText);
     if (endPlan.shouldDispatchNext) deps.dispatchNextQueuedTelegramTurn();
     return;
   }

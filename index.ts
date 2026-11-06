@@ -434,6 +434,19 @@ export default function (pi: Pi.ExtensionAPI) {
       getHandlers: configStore.getOutboundHandlers,
       recordRuntimeEvent,
     });
+  // π core retries the same model only (never switches), so one provider
+  // outage would strand every following turn until /model is opened by hand.
+  // This runtime walks enabledModels order, flips to the next usable model,
+  // and returns a note appended to the error reply.
+  const modelFallbackRuntime =
+    Model.createTelegramModelFallbackRuntime<ActivePiModel, Pi.ExtensionContext>(
+      {
+        getActiveModel: currentModelRuntime.get,
+        createSettingsManager: Pi.createSettingsManager,
+        setModel,
+        setCurrentModel: currentModelRuntime.setCurrentModel,
+      },
+    );
   const agentLifecycleHooks = Queue.createTelegramAgentLifecycleHooks<
     Queue.PendingTelegramTurn,
     Pi.ExtensionContext,
@@ -472,6 +485,7 @@ export default function (pi: Pi.ExtensionAPI) {
     getActiveToolExecutions: lifecycle.getActiveToolExecutions,
     setActiveToolExecutions: lifecycle.setActiveToolExecutions,
     triggerPendingModelSwitchAbort: modelSwitchController.triggerPendingAbort,
+    autoSwitchOnModelError: modelFallbackRuntime,
   });
   // Wire transport-level reply dedup reset via lifecycle
   Lifecycle.setResetTransportReplyDedup(Replies.resetTransportReplyDedup);

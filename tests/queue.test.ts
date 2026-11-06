@@ -1210,6 +1210,45 @@ test("Agent end runtime reports errors and dispatches next turn", async () => {
   ]);
 });
 
+test("Agent end runtime appends the model-fallback note to provider errors", async () => {
+  const sent: string[] = [];
+  await handleTelegramAgentEndRuntime({
+    turn: {
+      kind: "prompt",
+      chatId: 1,
+      replyToMessageId: 2,
+      sourceMessageIds: [2],
+      queueOrder: 1,
+      queueLane: "default",
+      laneOrder: 1,
+      queuedAttachments: [],
+      content: [{ type: "text", text: "prompt" }],
+      historyText: "prompt",
+      statusSummary: "prompt",
+    },
+    assistant: { stopReason: "error", errorMessage: "503 status code" },
+    preserveQueuedTurnsAsHistory: false,
+    resetRuntimeState: () => {},
+    updateStatus: () => {},
+    dispatchNextQueuedTelegramTurn: () => {},
+    clearPreview: async () => {},
+    setPreviewPendingText: () => {},
+    finalizeMarkdownPreview: async () => true,
+    sendMarkdownReply: async () => {},
+    sendTextReply: async (_chatId, _replyToMessageId, text) => {
+      sent.push(text);
+    },
+    sendQueuedAttachments: async () => {},
+    autoSwitchOnModelError: (errorMessage) =>
+      errorMessage.includes("503")
+        ? "🔁 đã tự chuyển sang amd/DeepSeek-V4.1-Flash"
+        : undefined,
+  });
+  assert.deepEqual(sent, [
+    "⚠️ Lỗi nhà cung cấp model (HTTP 503) — thử lại sau hoặc đổi model bằng /model.\n🔁 đã tự chuyển sang amd/DeepSeek-V4.1-Flash",
+  ]);
+});
+
 test("Agent end plan classifies turn outcomes correctly", () => {
   const noTurnPlan = buildTelegramAgentEndPlan({
     hasTurn: false,

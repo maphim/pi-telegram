@@ -18,12 +18,14 @@ import {
   createCurrentModelStore,
   createCurrentModelUpdateRuntime,
   createPendingModelSwitchStore,
+  createTelegramModelFallbackRuntime,
   createTelegramModelSwitchContinuationQueue,
   createTelegramModelSwitchContinuationQueueRuntime,
   createTelegramModelSwitchContinuationTurnBuilder,
   createTelegramModelSwitchController,
   createTelegramModelSwitchControllerRuntime,
   getCanonicalModelId,
+  isProviderServerModelError,
   isThinkingLevel,
   type MenuModel,
   modelsMatch,
@@ -575,4 +577,137 @@ test("persistence persist is gated until the first restore (boot window)", async
   await runtime.onSessionStart({}, ctx);
   runtime.persist({ provider: "amd", id: "Qwen3.8-27B" }); // genuine selection
   assert.deepEqual(saved, [{ provider: "amd", id: "Qwen3.8-27B" }]);
+});
+
+test("Provider error classifier separates provider failures from user/context errors", () => {
+  assert.equal(isProviderServerModelError("410 status code (no body)"), true);
+  assert.equal(isProviderServerModelError("502 status code (Bad Gateway)"), true);
+  assert.equal(isProviderServerModelError("503 status code"), true);
+  assert.equal(isProviderServerModelError("fetch failed"), true);
+  assert.equal(isProviderServerModelError("request timed out"), true);
+  assert.equal(isProviderServerModelError("The turn was aborted by user"), false);
+  assert.equal(isProviderServerModelError("context window exceeded"), false);
+  assert.equal(isProviderServerModelError("unexpected internal bug"), false);
+  assert.equal(isProviderServerModelError(""), false);
+});
+
+test("Model fallback switches to the next enabled model and reports it", async () => {
+  const active = createModelTestModel("amd", "DeepSeek-V4.1-Flash");
+  const next = createModelTestModel("nvidia", "z-ai/glm-5.3-flash");
+  const switched: string[] = [];
+  const runtime = createTelegramModelFallbackRuntime<MenuModel>({
+    getActiveModel: () => active,
+    createSettingsManager: () => ({
+      getEnabledModels: () => [
+        "amd/DeepSeek-V4.1-Flash",
+        "nvidia/z-ai/glm-5.3-flash",
+      ],
+    }),
+    setModel: async (model) => {
+      switched.push(`set:${getCanonicalModelId(model)}`);
+      return true;
+    },
+    setCurrentModel: (model) => {
+      switched.push(`current:${getCanonicalModelId(model)}`);
+    },
+  });
+  const note = await runtime("502 status code", {
+    cwd: "/tmp",
+    modelRegistry: { refresh: () => {}, getAvailable: () => [active, next] },
+  });
+  assert.match(note ?? "", /nvidia\/z-ai\/glm-5\.3-flash/);
+  assert.deepEqual(switched, [
+    "set:nvidia/z-ai/glm-5.3-flash",
+    "current:nvidia/z-ai/glm-5.3-flash",
+  ]);
+});
+
+test("Model fallback leaves the model alone for non-provider errors", async () => {
+  const active = createModelTestModel("amd", "DeepSeek-V4.1-Flash");
+  let switches = 0;
+  const runtime = createTelegramModelFallbackRuntime<MenuModel>({
+    getActiveModel: () => active,
+    createSettingsManager: () => ({
+      getEnabledModels: () => [
+        "amd/DeepSeek-V4.1-Flash",
+        "nvidia/z-ai/glm-5.3-flash",
+      ],
+    }),
+    setModel: async () => {
+      switches += 1;
+      return true;
+    },
+    setCurrentModel: () => {},
+  });
+  const ctx = {
+    cwd: "/tmp",
+    modelRegistry: {
+      refresh: () => {},
+      getAvailable: () =>
+        [active, createModelTestModel("nvidia", "z-ai/glm-5.3-flash")],
+    },
+  };
+  assert.equal(await runtime("user aborted the turn", ctx), undefined);
+  assert.equal(await runtime("context window exceeded", ctx), undefined);
+  assert.equal(switches, 0);
+});
+
+test("Model fallback skips models pi refuses and stops when nothing is left", async () => {
+  const active = createModelTestModel("amd", "DeepSeek-V4.1-Flash");
+  const middle = createModelTestModel("nvidia", "z-ai/glm-5.3-flash");
+  const last = createModelTestModel("deepseek", "deepseek-v4-pro");
+  const attempted: string[] = [];
+  const runtime = createTelegramModelFallbackRuntime<MenuModel>({
+    getActiveModel: () => active,
+    createSettingsManager: () => ({
+      getEnabledModels: () => [
+        "amd/DeepSeek-V4.1-Flash",
+        "nvidia/z-ai/glm-5.3-flash",
+        "deepseek/deepseek-v4-pro",
+      ],
+    }),
+    setModel: async (model) => {
+      attempted.push(getCanonicalModelId(model));
+      return getCanonicalModelId(model) === "deepseek/deepseek-v4-pro";
+    },
+    setCurrentModel: () => {},
+  });
+  const note = await runtime("503 status code", {
+    cwd: "/tmp",
+    modelRegistry: {
+      refresh: () => {},
+      getAvailable: () => [active, middle, last],
+    },
+  });
+  assert.deepEqual(attempted, [
+    "nvidia/z-ai/glm-5.3-flash",
+    "deepseek/deepseek-v4-pro",
+  ]);
+  assert.match(note ?? "", /deepseek\/deepseek-v4-pro/);
+});
+
+test("Model fallback wraps around the enabled order", async () => {
+  const active = createModelTestModel("deepseek", "deepseek-v4-pro");
+  const first = createModelTestModel("amd", "DeepSeek-V4.1-Flash");
+  const switched: string[] = [];
+  const runtime = createTelegramModelFallbackRuntime<MenuModel>({
+    getActiveModel: () => active,
+    createSettingsManager: () => ({
+      getEnabledModels: () => [
+        "amd/DeepSeek-V4.1-Flash",
+        "deepseek/deepseek-v4-pro",
+      ],
+    }),
+    setModel: async (model) => {
+      switched.push(getCanonicalModelId(model));
+      return true;
+    },
+    setCurrentModel: () => {},
+  });
+  const note = await runtime("410 status code", {
+    cwd: "/tmp",
+    modelRegistry: { refresh: () => {}, getAvailable: () => [first, active] },
+  });
+  assert.deepEqual(switched, ["amd/DeepSeek-V4.1-Flash"]);
+  assert.match(note ?? "", /amd\/DeepSeek-V4\.1-Flash/);
 });
