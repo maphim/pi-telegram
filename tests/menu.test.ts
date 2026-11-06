@@ -537,7 +537,13 @@ test("Menu helpers build model callback plans for paging, page menu, selection, 
       canRestartBusyRun: false,
       hasActiveToolExecutions: false,
     }),
-    { kind: "answer", text: "π is busy. Send /abort, /next, or /stop." },
+    {
+      kind: "switch-model",
+      selection: state.allModels[1],
+      mode: "idle",
+      callbackText:
+        "Switched to claude-3 — applies from the next turn (current run is busy).",
+    },
   );
 });
 
@@ -769,7 +775,7 @@ test("Menu helpers open status and model menus through runtime ports", async () 
   ]);
 });
 
-test("Menu helpers report model-menu busy and no-model paths", async () => {
+test("Menu helpers open model menu while busy and keep no-model path", async () => {
   const events: string[] = [];
   await openTelegramStatusMenu({
     isIdle: () => false,
@@ -802,25 +808,36 @@ test("Menu helpers report model-menu busy and no-model paths", async () => {
     sendModelMenu: async () => 1,
     storeModelMenuState: () => {},
   });
+  // Busy + không offer in-flight switch — TRƯỚC đây bị block "Cannot switch
+  // model while π is busy"; giờ menu PHẢI mở được (chọn = áp dụng turn kế tiếp).
+  const busyState = createMenuState(0);
+  const busyModel = { provider: "test", id: "busy-alpha", reasoning: false };
+  busyState.allModels = [{ model: busyModel }];
   await openTelegramModelMenu({
     isIdle: () => false,
     canOfferInFlightModelSwitch: () => false,
     sendBusyMessage: async () => {
-      events.push("busy-model");
+      events.push("unexpected:busy-model");
     },
     sendNoModelsMessage: async () => {
       events.push("unexpected:no-models");
     },
-    getModelMenuState: async () => createMenuState(0),
-    getActiveModel: () => undefined,
-    sendModelMenu: async () => 1,
-    storeModelMenuState: () => {},
+    getModelMenuState: async () => busyState,
+    getActiveModel: () => busyModel,
+    sendModelMenu: async (state, activeModel) => {
+      events.push(`model-busy:${activeModel?.id}`);
+      return 13;
+    },
+    storeModelMenuState: (state) => {
+      events.push(`store:${state.messageId}:${state.mode}`);
+    },
   });
   assert.deepEqual(events, [
     "status",
     "store-status",
     "no-models",
-    "busy-model",
+    "model-busy:busy-alpha",
+    "store:13:model",
   ]);
 });
 

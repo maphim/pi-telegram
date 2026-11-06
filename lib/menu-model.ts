@@ -843,9 +843,14 @@ export function buildTelegramModelCallbackPlan<
   }
   if (!params.isIdle) {
     if (!params.canRestartBusyRun) {
+      // Busy nhưng không restart được (turn không phải Telegram / thiếu abort
+      // handler / trạng thái cũ) — VẪN đổi model cho turn kế tiếp thay vì từ
+      // chối (owner: "đổi model toàn báo busy, nhiều khi phải /stop mới đổi được").
       return {
-        kind: "answer",
-        text: "π is busy. Send /abort, /next, or /stop.",
+        kind: "switch-model",
+        selection,
+        mode: "idle",
+        callbackText: `Switched to ${selection.model.id} — applies from the next turn (current run is busy).`,
       };
     }
     return {
@@ -870,10 +875,9 @@ export function buildTelegramModelCallbackPlan<
 export async function openTelegramModelMenu<
   TModel extends MenuModel = MenuModel,
 >(deps: TelegramModelMenuOpenDeps<TModel>): Promise<void> {
-  if (!deps.isIdle() && !deps.canOfferInFlightModelSwitch()) {
-    await deps.sendBusyMessage();
-    return;
-  }
+  // Busy KHÔNG chặn mở menu nữa: chọn model lúc bận vẫn được (áp dụng cho turn
+  // kế tiếp — xem buildTelegramModelCallbackPlan). Trước đây busy → "Cannot
+  // switch model while π is busy" và nhiều khi phải /stop mới đổi được.
   const state = await deps.getModelMenuState();
   if (state.allModels.length === 0) {
     await deps.sendNoModelsMessage();
@@ -943,9 +947,11 @@ export async function handleTelegramModelMenuCallbackAction<
   if (plan.mode === "restart-now") {
     const restarted = await deps.restartInterruptedTelegramTurn(plan.selection);
     if (!restarted) {
+      // setModel đã chạy ở trên — KHÔNG được trả về "busy" (model đã đổi thật);
+      // báo rõ switch thành công, chỉ là không restart được turn đang chạy.
       await deps.answerCallbackQuery(
         callbackQueryId,
-        "π is busy. Send /abort, /next, or /stop.",
+        `Switched to ${plan.selection.model.id} — applies from the next turn (could not restart the current run).`,
       );
       return true;
     }
