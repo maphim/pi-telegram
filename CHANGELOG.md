@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.0: Session Switching (/sessions, /resume, /new)
+
+- `[Sessions]` New `/sessions` command lists the 10 most recently active pi sessions (index, start time, size, short id, first user message preview, current-session marker); `/resume <index|id-prefix>` restarts the bridge into that session; `/new` opens a fresh session while keeping every old session file resumable. Impact: long-running context can be split per topic and yesterday's thread can be picked up from Telegram — one active session at a time, by design.
+- `[Restart]` `/restart` now starts a new session via the restart marker instead of wiping the session directory. Impact: bridge restarts no longer destroy session history (previous behaviour `rm -rf .pi/sessions` was lossy and made resume impossible).
+- `[Commands]` `sessions`, `resume`, `new` are reserved bridge commands and registered in the Telegram menu; all three refuse to run while a turn is in flight.
+
 ## 0.11.2: Status Card vs Start Menu
 
 - `[Status]` `/status` now replies with the compact status card only (HTML text, no inline keyboard) and works even while π is busy — it is a read-only lookup. Impact: checking the active model, context usage and spend no longer opens a menu the owner has to dismiss.

@@ -125,6 +125,20 @@ test("Command helpers register Telegram bot commands through deps", async () => 
   assert.deepEqual(calls, [TELEGRAM_BOT_COMMANDS, TELEGRAM_BOT_COMMANDS]);
 });
 
+test("Session commands are reserved, immediate, and in the bot menu", () => {
+  for (const name of ["sessions", "resume", "new"]) {
+    assert.equal(isTelegramReservedCommandName(name), true);
+    const action = (
+      TELEGRAM_COMMAND_ACTIONS as Record<string, { executionMode: string }>
+    )[name];
+    assert.equal(action?.executionMode, "immediate");
+  }
+  const names = TELEGRAM_BOT_COMMANDS.map((entry) => entry.command);
+  for (const name of ["sessions", "resume", "new"]) {
+    assert.ok(names.includes(name), `bot menu must expose /${name}`);
+  }
+});
+
 test("Bot command menu exposes the bridge-served commands", () => {
   const names = TELEGRAM_BOT_COMMANDS.map((entry) => entry.command);
   for (const expected of ["status", "model", "thinking", "queue", "help"]) {

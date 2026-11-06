@@ -9,6 +9,13 @@ import * as fs from "node:fs";
 import { pairTelegramUserIfNeeded } from "./config.ts";
 import type { ExtensionAPI, ExtensionCommandContext } from "./pi.ts";
 import {
+  buildTelegramSessionListText,
+  formatTelegramSessionStartedAt,
+  listTelegramSessions,
+  resolveTelegramSessionChoice,
+  writeTelegramSessionSwitchMarker,
+} from "./sessions.ts";
+import {
   createTelegramControlItemBuilder,
   createTelegramControlQueueController,
   type PendingTelegramControlItem,
@@ -41,6 +48,9 @@ export const TELEGRAM_COMMAND_EMOJI = {
   continue: "[>>]",
   abort: "[X]",
   stop: "[!]",
+  sessions: "[S]",
+  resume: "[@]",
+  new: "[+]",
 } as const;
 
 export type TelegramCommandEmojiName = keyof typeof TELEGRAM_COMMAND_EMOJI;
@@ -133,6 +143,24 @@ export const TELEGRAM_BUILTIN_BOT_COMMANDS: readonly TelegramBotCommandDefinitio
         "restart",
         "Restart Telegram bridge",
       ),
+    },
+    {
+      command: "sessions",
+      description: formatTelegramBotCommandDescription(
+        "sessions",
+        "List sessions to resume",
+      ),
+    },
+    {
+      command: "resume",
+      description: formatTelegramBotCommandDescription(
+        "resume",
+        "Switch to a session",
+      ),
+    },
+    {
+      command: "new",
+      description: formatTelegramBotCommandDescription("new", "New session"),
     },
     {
       command: "help",
@@ -300,6 +328,9 @@ export const TELEGRAM_RESERVED_COMMAND_NAMES = [
   "restart",
   "help",
   "start",
+  "sessions",
+  "resume",
+  "new",
 ] as const;
 
 export type TelegramReservedCommandName =
@@ -330,6 +361,9 @@ export type TelegramCommandAction =
   | { kind: "model"; executionMode: "immediate" }
   | { kind: "restart"; executionMode: "immediate" }
   | { kind: "thinking"; executionMode: "immediate" }
+  | { kind: "sessions"; executionMode: "immediate" }
+  | { kind: "resume"; executionMode: "immediate" }
+  | { kind: "new"; executionMode: "immediate" }
   | {
       kind: "help";
       commandName: "help" | "start";
@@ -349,6 +383,9 @@ export interface TelegramCommandActionDeps<TMessage, TContext> {
   handleModel: (message: TMessage, ctx: TContext) => Promise<void>;
   handleThinking: (message: TMessage, ctx: TContext) => Promise<void>;
   handleRestart: (message: TMessage, ctx: TContext) => Promise<void>;
+  handleSessions: (message: TMessage, ctx: TContext) => Promise<void>;
+  handleResume: (message: TMessage, ctx: TContext) => Promise<void>;
+  handleNew: (message: TMessage, ctx: TContext) => Promise<void>;
   handleHelp: (
     message: TMessage,
     commandName: "help" | "start",
@@ -665,6 +702,37 @@ export function createTelegramAppMenuHtmlBuilder<TContext>(deps: {
   };
 }
 
+/**
+ * Read-only view of pi's session manager from a command context. Kept loose
+ * (unknown) because the Telegram runtime only guarantees the structural
+ * subset while the real context is pi's ExtensionCommandContext.
+ */
+function getTelegramSessionPorts(ctx: unknown): {
+  sessionDir: string | undefined;
+  currentFile: string | undefined;
+} {
+  const ctxAny = ctx as Record<string, unknown>;
+  const sessionManager = ctxAny["sessionManager"] as
+    | {
+        getSessionDir?: () => string;
+        getSessionFile?: () => string | undefined;
+      }
+    | undefined;
+  let sessionDir: string | undefined;
+  try {
+    sessionDir = sessionManager?.getSessionDir?.() ?? undefined;
+  } catch {
+    sessionDir = undefined;
+  }
+  let currentFile: string | undefined;
+  try {
+    currentFile = sessionManager?.getSessionFile?.() ?? undefined;
+  } catch {
+    currentFile = undefined;
+  }
+  return { sessionDir, currentFile };
+}
+
 function getTelegramCommandErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -693,6 +761,9 @@ export const TELEGRAM_COMMAND_ACTIONS = {
   restart: { kind: "restart", executionMode: "immediate" },
   help: { kind: "help", commandName: "help", executionMode: "immediate" },
   start: { kind: "help", commandName: "start", executionMode: "immediate" },
+  sessions: { kind: "sessions", executionMode: "immediate" },
+  resume: { kind: "resume", executionMode: "immediate" },
+  new: { kind: "new", executionMode: "immediate" },
 } as const satisfies Record<TelegramReservedCommandName, TelegramCommandAction>;
 
 export function buildTelegramCommandAction(
@@ -850,7 +921,7 @@ export async function handleTelegramCompactCommand(
 export const TELEGRAM_START_GREETING = [
   "👋 Chào anh! Em là π trên Telegram.",
   "Gõ câu hỏi bất kỳ (gửi kèm ảnh/file thoải mái) — em xử lý rồi trả lời ngay đây.",
-  "Lệnh nhanh: /status (model · token · chi phí) · /model (đổi model) · /thinking · /queue · /compact · /abort · /stop · /restart · /help",
+  "Lệnh nhanh: /status (model · token · chi phí) · /model (đổi model) · /thinking · /queue · /sessions · /resume <số> · /new · /compact · /abort · /stop · /restart · /help",
 ].join("\n");
 
 /**
@@ -917,6 +988,15 @@ export async function executeTelegramCommandAction<TMessage, TContext>(
       return true;
     case "restart":
       await deps.handleRestart(message, ctx);
+      return true;
+    case "sessions":
+      await deps.handleSessions(message, ctx);
+      return true;
+    case "resume":
+      await deps.handleResume(message, ctx);
+      return true;
+    case "new":
+      await deps.handleNew(message, ctx);
       return true;
     case "help":
       await deps.handleHelp(message, action.commandName, ctx);
@@ -1166,7 +1246,7 @@ async function handleTelegramCommandRuntime<
             sessionTurns = entries.filter((e) => (e as Record<string, unknown>)["type"] === "message").length;
           }
         } catch {}
-        try { fs.writeFileSync("/tmp/pi-force-new-session", "1", "utf-8"); } catch {}
+        try { writeTelegramSessionSwitchMarker("new"); } catch {}
         try { fs.writeFileSync("/tmp/pi-telegram-restart-marker", fullCost.toFixed(4), "utf-8"); } catch {}
         const costLine = `[*] Cost: $${fullCost.toFixed(4)}`;
         const tokenLine = totalTokensIn || totalTokensOut
@@ -1175,6 +1255,84 @@ async function handleTelegramCommandRuntime<
         const turnLine = `[*] Turns: ${sessionTurns}`;
         const body = [costLine, tokenLine, turnLine].filter(Boolean).join("\n");
         try { await sendToRestart(`[R] Restarting pi-telegram...\n\n— Previous session —\n${body}\n— New session —\n[*] Cost: $0.0000`); } catch {}
+        setTimeout(() => process.exit(0), 500);
+      },
+      handleSessions: async (nextMessage, commandCtx) => {
+        const ports = getTelegramSessionPorts(commandCtx);
+        if (!ports.sessionDir) {
+          await sendReplyFor(nextMessage)(
+            "Không xác định được thư mục session của bridge.",
+          );
+          return;
+        }
+        const entries = listTelegramSessions(ports.sessionDir);
+        await sendReplyFor(nextMessage)(
+          buildTelegramSessionListText(entries, {
+            currentFile: ports.currentFile,
+          }),
+        );
+      },
+      handleResume: async (nextMessage, commandCtx) => {
+        const reply = sendReplyFor(nextMessage);
+        if (!deps.isIdle(commandCtx)) {
+          await reply(
+            "π đang chạy turn — gửi /abort hoặc /stop rồi thử /resume lại nhé.",
+          );
+          return;
+        }
+        const ports = getTelegramSessionPorts(commandCtx);
+        if (!ports.sessionDir) {
+          await reply("Không xác định được thư mục session của bridge.");
+          return;
+        }
+        const entries = listTelegramSessions(ports.sessionDir);
+        const parsed = parseTelegramCommand(
+          ((nextMessage as { text?: string }).text ?? "").trim(),
+        );
+        const choice = resolveTelegramSessionChoice(
+          entries,
+          parsed?.args ?? "",
+        );
+        if (choice.kind !== "found") {
+          await reply(
+            choice.kind === "missing"
+              ? "Không tìm thấy session đó — xem /sessions để lấy số hoặc id."
+              : "Cần số thứ tự trong /sessions hoặc ít nhất 4 ký tự id session.",
+          );
+          return;
+        }
+        try {
+          writeTelegramSessionSwitchMarker("session", choice.entry.filePath);
+        } catch (error) {
+          await reply(
+            `Không ghi được marker chuyển session: ${getTelegramCommandErrorMessage(error)}`,
+          );
+          return;
+        }
+        await reply(
+          `Đang chuyển sang session ${choice.entry.id.slice(0, 8)} (${formatTelegramSessionStartedAt(choice.entry.startedAt)}) — bridge khởi động lại khoảng 5-10s.`,
+        );
+        setTimeout(() => process.exit(0), 500);
+      },
+      handleNew: async (nextMessage, commandCtx) => {
+        const reply = sendReplyFor(nextMessage);
+        if (!deps.isIdle(commandCtx)) {
+          await reply(
+            "π đang chạy turn — gửi /abort hoặc /stop rồi thử /new lại nhé.",
+          );
+          return;
+        }
+        try {
+          writeTelegramSessionSwitchMarker("new");
+        } catch (error) {
+          await reply(
+            `Không ghi được marker session mới: ${getTelegramCommandErrorMessage(error)}`,
+          );
+          return;
+        }
+        await reply(
+          "Mở session mới — session hiện tại vẫn giữ nguyên, xem lại bằng /sessions. Bridge khởi động lại khoảng 5-10s.",
+        );
         setTimeout(() => process.exit(0), 500);
       },
       handleThinking: async (nextMessage, commandCtx) => {
