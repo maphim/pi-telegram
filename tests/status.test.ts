@@ -368,7 +368,61 @@ test("Status HTML builder binds active model lookup", () => {
     modelRegistry: { isUsingOAuth: () => false },
   });
   assert.match(html, /Status.*idle/s);
-  assert.match(html, /Context.*0\.0%\/1\.0k/s);
+  assert.match(html, /Model.*openai\/gpt-5/s);
+  assert.match(html, /Context.*\? tokens \(0\.0% used of 1\.0k\)/s);
+});
+
+test("Status HTML shows the opencode-style model usage card", () => {
+  const buildStatusHtml = createTelegramStatusHtmlBuilder({
+    getActiveModel: () => ({
+      provider: "amd",
+      id: "MiMo-V2.6-Flash",
+      contextWindow: 1000000,
+    }),
+  });
+  const html = buildStatusHtml({
+    sessionManager: {
+      getEntries: () => [
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            usage: {
+              input: 120000,
+              output: 20398,
+              cacheRead: 0,
+              cacheWrite: 0,
+              cost: { total: 0.0438 },
+            },
+          },
+        },
+      ],
+    },
+    getContextUsage: () => ({
+      tokens: 140398,
+      percent: 13.4,
+      contextWindow: 1000000,
+    }),
+    isIdle: () => true,
+    modelRegistry: { isUsingOAuth: () => false },
+  });
+  assert.match(html, /Model.*amd\/MiMo-V2\.6-Flash/s);
+  assert.match(html, /140,398 tokens \(13\.4% used of 1\.0M\)/);
+  assert.match(html, /\$0\.0438 spent/);
+});
+
+test("Status HTML marks subscription models and unknown context honestly", () => {
+  const buildStatusHtml = createTelegramStatusHtmlBuilder({
+    getActiveModel: () => ({ provider: "openai", id: "gpt-5" }),
+  });
+  const html = buildStatusHtml({
+    sessionManager: { getEntries: () => [] },
+    getContextUsage: () => undefined,
+    isIdle: () => true,
+    modelRegistry: { isUsingOAuth: () => true },
+  });
+  assert.match(html, /Context.*unknown/s);
+  assert.match(html, /\$0\.0000 spent \(sub\)/);
 });
 
 test("Status HTML builder shows compacting while compact is running", () => {

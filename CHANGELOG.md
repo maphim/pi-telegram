@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.11.0: Opencode-Style Model Usage Card
+
+- `[Status]` Telegram `/status` now opens with a `Model` row (`provider/id`) and the `Context` row reports the exact token count with the used percentage and window (`140,398 tokens (13.4% used of 1.0M)`) instead of only `13.4%/1.0M`. Impact: checking which model is running now shows what it is and how much of its window is consumed in a single reply, matching the opencode context card; compacted/unknown values stay honest (`?` / `unknown`).
+- `[Status]` The `Cost` row now shows four decimals with the `spent` wording and keeps `(sub)` for OAuth models (`$0.0438 spent`). Impact: cheap and free-tier sessions no longer round down to `$0.000`, so actual spend is visible before it grows.
+
 ## 0.10.8: Compact Typing Timing Hotfix
 
 - `[Compaction]` Telegram `/compact` now starts the native `typing` chat-action keepalive after the "Compaction started" notice is sent, then stops it on completion or failure. Impact: operators see the same Telegram activity indicator during context compression that they already see during normal agent/tool work, without showing `typing` before the explicit start confirmation arrives.

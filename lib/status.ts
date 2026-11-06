@@ -31,11 +31,14 @@ interface TelegramStatusSessionEntry {
 }
 
 interface TelegramContextUsage {
+  tokens?: number | null;
   contextWindow?: number;
   percent: number | null;
 }
 
 export interface TelegramStatusActiveModel {
+  provider?: string;
+  id?: string;
   contextWindow?: number;
 }
 
@@ -489,6 +492,17 @@ function formatTokens(count: number): string {
   return `${Math.round(count / 1000000)}M`;
 }
 
+/**
+ * Exact token count with thousands separators (`140,398`) — the owner asked
+ * for opencode-style absolute numbers next to the compact window figure.
+ * Deliberately locale-independent so every machine renders the same text.
+ */
+function formatTokenCount(count: number): string {
+  return Math.round(count)
+    .toString()
+    .replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+
 function collectUsageStats(ctx: TelegramStatusContext): TelegramUsageStats {
   const stats: TelegramUsageStats = {
     totalInput: 0,
@@ -535,7 +549,7 @@ function buildCostSummary(
   usesSubscription: boolean,
 ): string | undefined {
   if (!stats.totalCost && !usesSubscription) return undefined;
-  return `$${stats.totalCost.toFixed(3)}${usesSubscription ? " (sub)" : ""}`;
+  return `$${stats.totalCost.toFixed(4)} spent${usesSubscription ? " (sub)" : ""}`;
 }
 
 function buildContextSummary(
@@ -546,7 +560,9 @@ function buildContextSummary(
   if (!usage) return "unknown";
   const contextWindow = usage.contextWindow ?? activeModel?.contextWindow ?? 0;
   const percent = usage.percent !== null ? `${usage.percent.toFixed(1)}%` : "?";
-  return `${percent}/${formatTokens(contextWindow)}`;
+  const tokens =
+    typeof usage.tokens === "number" ? formatTokenCount(usage.tokens) : "?";
+  return `${tokens} tokens (${percent} used of ${formatTokens(contextWindow)})`;
 }
 
 function buildStatusSummary(ctx: TelegramStatusContext): string {
@@ -579,7 +595,15 @@ export function buildStatusHtml(
   const usesSubscription = activeModel
     ? ctx.modelRegistry.isUsingOAuth(activeModel)
     : false;
-  const lines: string[] = [buildStatusRow("Status", buildStatusSummary(ctx))];
+  const lines: string[] = [];
+  const modelId =
+    activeModel?.provider && activeModel?.id
+      ? `${activeModel.provider}/${activeModel.id}`
+      : undefined;
+  if (modelId) {
+    lines.push(buildStatusRow("Model", modelId));
+  }
+  lines.push(buildStatusRow("Status", buildStatusSummary(ctx)));
   const usageSummary = buildUsageSummary(stats);
   const costSummary = buildCostSummary(stats, usesSubscription);
   if (usageSummary) {
