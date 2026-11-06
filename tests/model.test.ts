@@ -4,12 +4,16 @@
  */
 
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import {
   buildTelegramModelSwitchContinuationText,
   buildTelegramModelSwitchContinuationTurn,
   canRestartTelegramTurnForModelSwitch,
+  createActiveModelPersistenceRuntime,
   createCurrentModelRuntime,
   createCurrentModelStore,
   createCurrentModelUpdateRuntime,
@@ -25,8 +29,10 @@ import {
   modelsMatch,
   parseTelegramCliScopedModelPatterns,
   parseTelegramScopedModelPatternList,
+  readActiveModel,
   resolveScopedModelPatterns,
   restartTelegramModelSwitchContinuation,
+  saveActiveModel,
   shouldTriggerPendingTelegramModelSwitchAbort,
   sortScopedModels,
   THINKING_LEVELS,
@@ -479,4 +485,94 @@ test("Continuation prompt stays Telegram-scoped and resume-oriented", () => {
   assert.match(text, /Continue the interrupted previous Telegram request/);
   assert.match(text, /openai\/gpt-5/);
   assert.match(text, /thinking level \(high\)/);
+});
+
+// --- Active model persistence (survives /restart + /new) ---
+
+test("saveActiveModel/readActiveModel roundtrip tolerates missing and corrupt files", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-active-model-"));
+  const path = join(dir, "active.json");
+  try {
+    assert.equal(readActiveModel(path), undefined); // missing file
+    saveActiveModel({ provider: "amd", id: "MiMo-V2.6-Flash" }, path);
+    assert.deepEqual(readActiveModel(path), {
+      provider: "amd",
+      id: "MiMo-V2.6-Flash",
+    });
+    writeFileSync(path, "{corrupt", "utf8");
+    assert.equal(readActiveModel(path), undefined); // corrupt → undefined
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("persistence restore re-applies a differing saved model exactly once", async () => {
+  const target: MenuModel = { provider: "amd", id: "MiMo-V2.6-Flash" };
+  let live: MenuModel = { provider: "nvidia", id: "z-ai/glm-5.3" };
+  const setCalls: MenuModel[] = [];
+  const ctx = {
+    modelRegistry: {
+      refresh: () => {},
+      getAvailable: () => [target],
+    },
+  };
+  const runtime = createActiveModelPersistenceRuntime({
+    getContextModel: () => live,
+    setModel: async (m) => {
+      setCalls.push(m);
+      live = m;
+      return true;
+    },
+    readSavedModel: () => ({ provider: "amd", id: "MiMo-V2.6-Flash" }),
+    saveSavedModel: () => {},
+  });
+  await runtime.onSessionStart({}, ctx);
+  assert.deepEqual(setCalls, [target]); // dead session model → persisted one
+  await runtime.onSessionStart({}, ctx); // next session_start: already on saved
+  assert.equal(setCalls.length, 1);
+});
+
+test("persistence restore keeps the current model when the saved one is gone", async () => {
+  const live: MenuModel = { provider: "amd", id: "MiMo-V2.6-Flash" };
+  let setCalls = 0;
+  const ctx = {
+    modelRegistry: {
+      refresh: () => {},
+      getAvailable: () => [] as MenuModel[],
+    },
+  };
+  const runtime = createActiveModelPersistenceRuntime({
+    getContextModel: () => live,
+    setModel: async () => {
+      setCalls += 1;
+      return true;
+    },
+    readSavedModel: () => ({ provider: "kimi", id: "kimi-k2.6" }),
+    saveSavedModel: () => {},
+  });
+  await runtime.onSessionStart({}, ctx);
+  assert.equal(setCalls, 0);
+});
+
+test("persistence persist is gated until the first restore (boot window)", async () => {
+  const saved: Array<Pick<MenuModel, "provider" | "id">> = [];
+  const ctx = {
+    modelRegistry: {
+      refresh: () => {},
+      getAvailable: () => [] as MenuModel[],
+    },
+  };
+  const runtime = createActiveModelPersistenceRuntime({
+    getContextModel: () => undefined,
+    setModel: async () => true,
+    readSavedModel: () => ({ provider: "amd", id: "MiMo-V2.6-Flash" }),
+    saveSavedModel: (m) => {
+      saved.push(m);
+    },
+  });
+  runtime.persist({ provider: "nvidia", id: "z-ai/glm-5.3" }); // session-init event
+  assert.equal(saved.length, 0); // must not clobber the persisted model
+  await runtime.onSessionStart({}, ctx);
+  runtime.persist({ provider: "amd", id: "Qwen3.8-27B" }); // genuine selection
+  assert.deepEqual(saved, [{ provider: "amd", id: "Qwen3.8-27B" }]);
 });

@@ -40,6 +40,7 @@ import {
   executeTelegramControlItemRuntime,
   executeTelegramQueueDispatchPlan,
   formatQueuedTelegramItemsStatus,
+  friendlyTurnErrorMessage,
   getNextTelegramToolExecutionCount,
   getTelegramQueueItemAdmissionMode,
   getTelegramQueueLaneContract,
@@ -1204,7 +1205,7 @@ test("Agent end runtime reports errors and dispatches next turn", async () => {
     "reset",
     "status",
     "clear:1",
-    "text:boom",
+    "text:⚠️ boom",
     "dispatch",
   ]);
 });
@@ -2590,4 +2591,21 @@ test("Session lifecycle hooks bind start and shutdown runtime ports", async () =
     "abort",
     "poll",
   ]);
+});
+
+test("friendlyTurnErrorMessage translates provider error soup into owner-friendly text", () => {
+  // The raw "410 status code (no body)" passthrough is the owner-reported bug.
+  const gone = friendlyTurnErrorMessage("410 status code (no body)");
+  assert.match(gone, /410 Gone/);
+  assert.match(gone, /\/model/);
+  assert.doesNotMatch(gone, /^410 status code/);
+
+  const overloaded = friendlyTurnErrorMessage("503 status code (no body)");
+  assert.match(overloaded, /HTTP 503/);
+
+  assert.match(friendlyTurnErrorMessage("fetch failed"), /Mất kết nối/);
+  assert.match(friendlyTurnErrorMessage("socket hang up"), /Mất kết nối/);
+
+  // Unknown errors stay intact but visibly marked.
+  assert.match(friendlyTurnErrorMessage("weird explosion"), /⚠️ weird explosion/);
 });

@@ -95,12 +95,22 @@ export default function (pi: Pi.ExtensionAPI) {
       getRecentRuntimeEvents: runtimeEvents.getEvents,
       getRuntimeLockState: lockRuntime.getStatusLabel,
     });
+  // Persist the Telegram-active model so /restart and /new restore it instead
+  // of falling back to whatever a fresh session resolves (owner bug: "restart
+  // không giữ model active"). The runtime owns registry lookup + boot-window
+  // gating; this composition root only wires named references.
+  const activeModelPersistence =
+    Model.createActiveModelPersistenceRuntime<Pi.ExtensionContext>({
+      getContextModel,
+      setModel,
+    });
   const currentModelRuntime = Model.createCurrentModelRuntime<
     Pi.ExtensionContext,
     ActivePiModel
   >({
     getContextModel,
     updateStatus,
+    onSelected: activeModelPersistence.persist,
   });
   const queueMutationRuntime =
     Queue.createTelegramQueueMutationController<Pi.ExtensionContext>({
@@ -366,8 +376,10 @@ export default function (pi: Pi.ExtensionAPI) {
     recordRuntimeEvent,
   });
   const sessionLifecycleRuntime = Lifecycle.appendTelegramLifecycleHooks(
-    queueSessionLifecycle,
-    { onSessionStart: lockedPollingRuntime.onSessionStart },
+    Lifecycle.appendTelegramLifecycleHooks(queueSessionLifecycle, {
+      onSessionStart: lockedPollingRuntime.onSessionStart,
+    }),
+    activeModelPersistence,
   );
 
   // --- Extension API Bindings ---

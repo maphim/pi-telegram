@@ -4,6 +4,10 @@
  * Owns model identity, thinking levels, scoped resolution, current-model state, and in-flight model switching
  */
 
+import { readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
 import type { PendingTelegramTurn } from "./queue.ts";
 import { TELEGRAM_PREFIX } from "./turns.ts";
 
@@ -81,6 +85,8 @@ export function createCurrentModelUpdateRuntime<
 >(deps: {
   setCurrentModel: (model: TModel | undefined) => void;
   updateStatus: (ctx: TContext) => void;
+  /** Optional observer: fires after every genuine model selection. */
+  onSelected?: (model: TModel) => void;
 }): CurrentModelUpdateRuntime<TContext, TModel> {
   const setAndUpdate = (model: TModel | undefined, ctx: TContext): void => {
     deps.setCurrentModel(model);
@@ -90,6 +96,7 @@ export function createCurrentModelUpdateRuntime<
     setCurrentModel: setAndUpdate,
     onModelSelect: (event, ctx) => {
       setAndUpdate(event.model, ctx);
+      if (event.model) deps.onSelected?.(event.model);
     },
   };
 }
@@ -100,6 +107,8 @@ export function createCurrentModelRuntime<
 >(deps: {
   getContextModel: (ctx: TContext) => TModel | undefined;
   updateStatus: (ctx: TContext) => void;
+  /** Optional observer: fires after every genuine model selection. */
+  onSelected?: (model: TModel) => void;
 }): CurrentModelRuntime<TContext, TModel> {
   const store = createCurrentModelStore(deps.getContextModel);
   return {
@@ -107,7 +116,133 @@ export function createCurrentModelRuntime<
     ...createCurrentModelUpdateRuntime({
       setCurrentModel: store.set,
       updateStatus: deps.updateStatus,
+      onSelected: deps.onSelected,
     }),
+  };
+}
+
+// --- Active model persistence (survives /restart + /new) ---
+
+export const ACTIVE_MODEL_FILE = join(
+  homedir(),
+  ".pi/agent/telegram-active-model.json",
+);
+
+export interface SavedActiveModel {
+  provider: string;
+  id: string;
+  updatedAt: string;
+}
+
+/** Best-effort persist of the active model so a restart can re-apply it. */
+export function saveActiveModel(
+  model: Pick<MenuModel, "provider" | "id">,
+  path: string = ACTIVE_MODEL_FILE,
+): void {
+  try {
+    const payload: SavedActiveModel = {
+      provider: model.provider,
+      id: model.id,
+      updatedAt: new Date().toISOString(),
+    };
+    writeFileSync(path, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  } catch {
+    // Persistence is best-effort; a read-only FS must never break model switching.
+  }
+}
+
+/** Read the last active model; undefined when missing or corrupt. */
+export function readActiveModel(
+  path: string = ACTIVE_MODEL_FILE,
+): { provider: string; id: string } | undefined {
+  try {
+    const parsed = JSON.parse(
+      readFileSync(path, "utf8"),
+    ) as Partial<SavedActiveModel>;
+    if (typeof parsed.provider === "string" && typeof parsed.id === "string") {
+      return { provider: parsed.provider, id: parsed.id };
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export interface ActiveModelPersistenceRuntime {
+  /** session_start hook: re-apply the persisted model once the session exists. */
+  onSessionStart: (event: unknown, ctx: unknown) => Promise<void>;
+  /** model_select observer: persist genuine selections (gated until first restore). */
+  persist: (model: Pick<MenuModel, "provider" | "id">) => void;
+}
+
+/**
+ * Keeps the Telegram-active model across /restart and /new.
+ *
+ * The bridge used to hold the active model in memory only, so a restart fell
+ * back to whatever pi resolved for a fresh session (possibly a retired model).
+ * Now every genuine selection is written to disk, and the first session_start
+ * re-applies it. Selections observed before that first restore (session-init
+ * model events) are ignored so they cannot clobber the persisted value.
+ */
+export function createActiveModelPersistenceRuntime<
+  TContext extends {
+    modelRegistry: {
+      refresh: () => void;
+      getAvailable: () => MenuModel[];
+    };
+  },
+>(deps: {
+  getContextModel: (ctx: TContext) => MenuModel | undefined;
+  setModel: (model: MenuModel) => Promise<boolean>;
+  readSavedModel?: () => { provider: string; id: string } | undefined;
+  saveSavedModel?: (model: Pick<MenuModel, "provider" | "id">) => void;
+}): ActiveModelPersistenceRuntime {
+  const read = deps.readSavedModel ?? readActiveModel;
+  const save = deps.saveSavedModel ?? saveActiveModel;
+  // Captured at extension load, before any session event can rewrite the file.
+  const bootSaved = read();
+  let restored = false;
+  const findSaved = (
+    ctx: TContext,
+    saved: { provider: string; id: string },
+  ): MenuModel | undefined => {
+    try {
+      ctx.modelRegistry.refresh();
+      return ctx.modelRegistry
+        .getAvailable()
+        .find(
+          (m) => m.provider === saved.provider && m.id === saved.id,
+        );
+    } catch {
+      return undefined;
+    }
+  };
+  return {
+    onSessionStart: async (_event, ctx) => {
+      const typedCtx = ctx as TContext;
+      const saved = restored ? read() : bootSaved;
+      restored = true;
+      if (!saved) return;
+      const current = deps.getContextModel(typedCtx);
+      if (
+        current &&
+        current.provider === saved.provider &&
+        current.id === saved.id
+      ) {
+        return;
+      }
+      const target = findSaved(typedCtx, saved);
+      if (!target) return; // persisted model no longer exists — keep current
+      try {
+        await deps.setModel(target);
+      } catch {
+        // A failed restore must never block session start.
+      }
+    },
+    persist: (model) => {
+      if (!restored) return; // boot window: session-init events don't count
+      save(model);
+    },
   };
 }
 

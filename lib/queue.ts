@@ -849,6 +849,29 @@ export interface TelegramAgentEndHookRuntimeDeps<
   recordRuntimeEvent?: TelegramAgentEndRuntimeDeps<TTurn>["recordRuntimeEvent"];
 }
 
+/**
+ * Translate provider/model transport errors into owner-friendly Vietnamese.
+ * Raw pass-through of HTTP status soup ("410 status code (no body)") is what
+ * the owner actually complained about — unknown errors stay intact but marked.
+ */
+export function friendlyTurnErrorMessage(errorMessage: string): string {
+  if (errorMessage.includes("410")) {
+    return "⚠️ Model đang dùng đã bị nhà cung cấp gỡ (HTTP 410 Gone). Anh đổi model bằng nút 🧠 Model (hoặc /model) nhé.";
+  }
+  const http = errorMessage.match(/(\d{3}) status code/);
+  if (http) {
+    return `⚠️ Lỗi nhà cung cấp model (HTTP ${http[1]}) — thử lại sau hoặc đổi model bằng /model.`;
+  }
+  if (
+    /timeout|timed out|ETIMEDOUT|ECONNRESET|ENOTFOUND|EAI_AGAIN|fetch failed|socket hang up|UND_ERR|network/i.test(
+      errorMessage,
+    )
+  ) {
+    return "⚠️ Mất kết nối tới nhà cung cấp model — thử lại giúp em.";
+  }
+  return `⚠️ ${errorMessage}`;
+}
+
 export interface TelegramAgentEndHookEvent<TMessage> {
   messages: readonly TMessage[];
 }
@@ -1046,8 +1069,9 @@ export async function handleTelegramAgentEndRuntime<
     await deps.sendTextReply(
       turn.chatId,
       turn.replyToMessageId,
-      assistant.errorMessage ||
-        "Telegram bridge: π failed while processing the request.",
+      assistant.errorMessage
+        ? friendlyTurnErrorMessage(assistant.errorMessage)
+        : "Telegram bridge: π failed while processing the request.",
     );
     if (endPlan.shouldDispatchNext) deps.dispatchNextQueuedTelegramTurn();
     return;
