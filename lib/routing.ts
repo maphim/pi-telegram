@@ -270,7 +270,15 @@ export function createTelegramInboundRouteRuntime<
     allocateItemOrder: deps.bridgeRuntime.queue.allocateItemOrder,
     allocateControlOrder: deps.bridgeRuntime.queue.allocateControlOrder,
     appendControlItem: deps.queueMutationRuntime.append,
-    showStatus: deps.menuActions.sendStatusMessage,
+    showStatus: deps.menuActions.sendStatusCardMessage,
+    showHelpMenu: (message, ctx) => {
+      const chatId = (message as { chat: { id: number } }).chat.id;
+      return deps.menuActions.sendStatusMessage(
+        chatId,
+        message.message_id,
+        ctx,
+      );
+    },
     openModelMenu: deps.menuActions.openModelMenu,
     openThinkingMenu: (message, ctx) => {
       const chatId = (message as { chat: { id: number } }).chat.id;

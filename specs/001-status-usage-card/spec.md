@@ -27,6 +27,9 @@ cần plumb usage vào menu state (buildState ctx tối thiểu) → làm spec r
 - **FR-004**: Honesty: `tokens === null` (ngay sau compaction) → `"?"`; `getContextUsage()` undefined
   → `"unknown"` (giữ nguyên hành vi cũ). Không bịa số.
 - **FR-005**: Không đổi row `Status`, `Usage`, không đổi lệnh/format nào khác ngoài phạm vi này.
+- **FR-008**: `/status` trả **card gọn** (text HTML, KHÔNG inline keyboard) và chạy được cả khi π đang
+  busy (read-only). `/start` giữ app menu có nút; `/help` chỉ menu (không lời chào).
+- **FR-009**: `/start` gửi trước một lời chào + cheat sheet ngắn (nhắc `/status`, `/model`, ...) rồi mới tới menu.
 - **FR-007**: Menu lệnh của bot (Telegram `setMyCommands`) phải chứa các lệnh bridge tự phục vụ
   `status`, `model`, `thinking`, `queue`, `help` — chủ chọn được từ danh sách, không phải gõ tay.
   (Phát hiện 2026-11-07 sau khi ship: menu chỉ có start/compact/next/continue/abort/stop/restart.)
@@ -38,6 +41,8 @@ cần plumb usage vào menu state (buildState ctx tối thiểu) → làm spec r
 - **SC-001**: `/status` reply chứa đủ 4 thông tin: model canonical id, tokens tuyệt đối, % used, cost spent.
 - **SC-002**: `npm test` ≥ baseline (461 pass / 40 fail pre-existing); `tsc --noEmit` file bị sửa 0 lỗi.
 - **SC-003**: Sabotage: bỏ dấu phẩy ngăn nghìn (hoặc bỏ row Model) → test FAIL tương ứng.
+- **SC-006**: `/status` không còn trả inline keyboard (test `Status card message replies with the status HTML and no keyboard`);
+  `/start` có lời chào còn `/help` thì không (test `Start greeting fires only for /start, /help stays menu-only`).
 - **SC-005**: Menu `/` của bot Telegram có `/status` (và model/thinking/queue/help) ngay sau restart;
   test `Bot command menu exposes the bridge-served commands` chứng minh.
 - **SC-004**: Không hồi quy các test status/menu/queue hiện có (cùng bộ pass/fail trước-sau trừ test mới).

@@ -46,3 +46,20 @@ Chủ phát hiện sau khi ship: `/status` chạy được nhưng không có tro
 - Full suite: **464 pass / 40 fail** (504 tests, +1 test mới, danh sách fail pre-existing không đổi).
 - Lưu ý: test `Command helpers expose Telegram bot command definitions` vẫn nằm trong nhóm
   fail pre-existing (source đã chuyển emoji ASCII, test chưa cập nhật) — ngoài phạm vi spec này.
+
+## Appendix 2 (2026-11-07): tách /status (card) khỏi /start (menu)
+
+Chủ chốt: `/status` = card gọn không nút; `/start` = lời chào + cheat sheet + menu.
+
+- `menu.ts`: `sendStatusCardMessage` (sendTextReply HTML, không keyboard, **không** busy-gate
+  → /status đọc được cả khi π đang chạy). Port `sendTextReply` mở rộng `options.parseMode`.
+- `routing.ts`: `showStatus` → card port (dùng cho `/status`); `showHelpMenu` → menu port
+  (dùng cho `/start` + `/help`, fallback `showStatus` khi không wire).
+- `commands.ts`: `TELEGRAM_START_GREETING` + `handleTelegramStartGreeting` (chỉ `start`), gọi
+  trước `showHelpMenu`.
+- Test: card (menu.test, sabotage S1 → 14 fail) + greeting (commands.test, sabotage S2 → 8 fail);
+  full suite **466 pass / 40 fail** (506 tests), typecheck 89 = baseline, 0 lỗi file sửa.
+- **Gap đã biết (honest)**: test hiện chứng minh hành vi card + greeting, nhưng **chưa có test
+  chứng minh việc routing gắn đúng port `/status`→card, `/start`→menu** (hai port cùng shape
+  `(chatId, replyToMessageId, ctx)` nên đảo chỗ vẫn biên dịch được). Nếu cần chắc hơn: viết test
+  routing-level gửi `/status` qua `routing.test.ts`.

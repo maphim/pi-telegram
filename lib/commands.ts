@@ -608,6 +608,11 @@ export interface TelegramCommandRuntimeDeps<
     execute: (ctx: TContext) => Promise<void>,
   ) => void;
   showStatus: (message: TMessage, ctx: TContext) => Promise<void>;
+  /**
+   * Guided menu used by /start and /help (status card + inline keyboard).
+   * Optional for backwards compatibility; falls back to `showStatus`.
+   */
+  showHelpMenu?: (message: TMessage, ctx: TContext) => Promise<void>;
   openModelMenu: (message: TMessage, ctx: TContext) => Promise<void>;
   openThinkingMenu: (message: TMessage, ctx: TContext) => Promise<void>;
   openQueueMenu: (message: TMessage, ctx: TContext) => Promise<void>;
@@ -840,6 +845,24 @@ export async function handleTelegramCompactCommand(
     return;
   }
   await deps.sendTextReply("Compaction started.");
+}
+
+export const TELEGRAM_START_GREETING = [
+  "👋 Chào anh! Em là π trên Telegram.",
+  "Gõ câu hỏi bất kỳ (gửi kèm ảnh/file thoải mái) — em xử lý rồi trả lời ngay đây.",
+  "Lệnh nhanh: /status (model · token · chi phí) · /model (đổi model) · /thinking · /queue · /compact · /abort · /stop · /restart · /help",
+].join("\n");
+
+/**
+ * /start opens with a short greeting + cheat sheet; /help stays menu-only so
+ * returning users skip the prose.
+ */
+export async function handleTelegramStartGreeting(deps: {
+  commandName: "help" | "start";
+  sendTextReply: (text: string) => Promise<unknown>;
+}): Promise<void> {
+  if (deps.commandName !== "start") return;
+  await deps.sendTextReply(TELEGRAM_START_GREETING);
 }
 
 export async function handleTelegramStatusCommand<TContext>(deps: {
@@ -1157,7 +1180,7 @@ async function handleTelegramCommandRuntime<
       handleThinking: async (nextMessage, commandCtx) => {
         await deps.openThinkingMenu(nextMessage, commandCtx);
       },
-      handleHelp: async (nextMessage, _nextCommandName, commandCtx) => {
+      handleHelp: async (nextMessage, commandName, commandCtx) => {
         try {
           await deps.registerBotCommands();
         } catch (error) {
@@ -1175,6 +1198,15 @@ async function handleTelegramCommandRuntime<
             persistConfig: deps.persistConfig,
             updateStatus: updateStatusFor(commandCtx),
           });
+        }
+        await handleTelegramStartGreeting({
+          commandName,
+          sendTextReply: sendReplyFor(nextMessage),
+        });
+        const showHelpMenu = deps.showHelpMenu;
+        if (showHelpMenu) {
+          await showHelpMenu(nextMessage, commandCtx);
+          return;
         }
         await deps.showStatus(nextMessage, commandCtx);
       },

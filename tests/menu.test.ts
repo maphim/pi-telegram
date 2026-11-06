@@ -1502,6 +1502,35 @@ test("Menu action runtime opens and updates interactive menu messages", async ()
   assert.equal(events[6], "store:99");
 });
 
+test("Status card message replies with the status HTML and no keyboard", async () => {
+  const events: string[] = [];
+  const modelA = createMenuModel("openai", "gpt-5");
+  const runtime = createTelegramMenuActionRuntime<string, typeof modelA>({
+    getModelMenuState: async () => createMenuState<typeof modelA>(2, {}),
+    getActiveModel: () => modelA,
+    getThinkingLevel: () => "medium",
+    buildStatusHtml: (ctx) => `<b>Status ${ctx}</b>`,
+    storeModelMenuState: () => {},
+    isIdle: () => false,
+    canOfferInFlightModelSwitch: () => false,
+    sendTextReply: async (
+      chatId,
+      replyToMessageId,
+      text,
+      options?: { parseMode?: "HTML" },
+    ) => {
+      events.push(`text:${chatId}:${replyToMessageId}:${text}:${options?.parseMode ?? "plain"}`);
+    },
+    editInteractiveMessage: async () => {},
+    sendInteractiveMessage: async () => {
+      events.push("unexpected:interactive");
+      return 99;
+    },
+  });
+  await runtime.sendStatusCardMessage(1, 2, "ctx");
+  assert.deepEqual(events, ["text:1:2:<b>Status ctx</b>:HTML"]);
+});
+
 test("Menu action runtime with state builder opens menus from settings runtime", async () => {
   const events: string[] = [];
   const modelA = createMenuModel("openai", "gpt-5");

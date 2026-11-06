@@ -25,6 +25,7 @@ import {
   getTelegramCommandMessageTarget,
   handleTelegramCompactCommand,
   handleTelegramModelCommand,
+  handleTelegramStartGreeting,
   handleTelegramStatusCommand,
   handleTelegramStopCommand,
   parseTelegramCommand,
@@ -778,6 +779,18 @@ test("Command helpers report compact errors", async () => {
     "event:compact:sync boom",
     "reply:Compaction failed: sync boom",
   ]);
+});
+
+test("Start greeting fires only for /start, /help stays menu-only", async () => {
+  const sent: string[] = [];
+  const sendTextReply = async (text: string) => {
+    sent.push(text);
+  };
+  await handleTelegramStartGreeting({ commandName: "start", sendTextReply });
+  await handleTelegramStartGreeting({ commandName: "help", sendTextReply });
+  assert.equal(sent.length, 1);
+  assert.match(sent[0] ?? "", /Chào anh/);
+  assert.match(sent[0] ?? "", /\/status/);
 });
 
 test("Command helpers execute status and model controls immediately", async () => {

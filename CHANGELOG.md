@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.11.2: Status Card vs Start Menu
+
+- `[Status]` `/status` now replies with the compact status card only (HTML text, no inline keyboard) and works even while π is busy — it is a read-only lookup. Impact: checking the active model, context usage and spend no longer opens a menu the owner has to dismiss.
+- `[Start]` `/start` keeps the guided menu (status + buttons) and now opens with a short greeting/cheat sheet; `/help` stays menu-only so returning users skip the prose. Impact: first-time pairing still explains the bridge, while `/status` becomes the quick glance it was meant to be.
+
 ## 0.11.1: Bot Command Menu Completeness
 
 - `[Commands]` The Telegram command menu (`setMyCommands`) now registers the bridge-served commands `status`, `model`, `thinking`, `queue`, and `help` next to the existing start/compact/next/continue/abort/stop/restart entries. Impact: the owner can pick `/status` (model + context tokens + cost) straight from the client slash menu instead of typing it by hand.

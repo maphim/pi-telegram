@@ -260,6 +260,7 @@ export interface TelegramMenuActionRuntimeDeps<
     chatId: number,
     replyToMessageId: number,
     text: string,
+    options?: { parseMode?: "HTML" },
   ) => Promise<unknown>;
   sectionRegistry?: TelegramSectionRegistry;
 }
@@ -281,6 +282,15 @@ export interface TelegramMenuActionRuntime<
     ctx: TContext,
   ) => Promise<void>;
   sendStatusMessage: (
+    chatId: number,
+    replyToMessageId: number,
+    ctx: TContext,
+  ) => Promise<void>;
+  /**
+   * Compact status card: status HTML as a plain (keyboard-less) reply. Works
+   * even while π is busy — /status is read-only.
+   */
+  sendStatusCardMessage: (
     chatId: number,
     replyToMessageId: number,
     ctx: TContext,
@@ -763,6 +773,14 @@ export function createTelegramMenuActionRuntime<
         deps.getQueueItemCount?.() ?? 0,
         deps.sectionRegistry,
       ),
+    sendStatusCardMessage: async (chatId, replyToMessageId, ctx) => {
+      await deps.sendTextReply(
+        chatId,
+        replyToMessageId,
+        deps.buildStatusHtml(ctx),
+        { parseMode: "HTML" },
+      );
+    },
     sendStatusMessage: (chatId, replyToMessageId, ctx) =>
       openTelegramStatusMenu({
         isIdle: () => deps.isIdle(ctx),

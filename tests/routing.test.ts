@@ -89,6 +89,9 @@ test("Routing runtime forwards authorized text messages into prompt queueing", a
     sendStatusMessage: async () => {
       events.push("status-menu");
     },
+    sendStatusCardMessage: async () => {
+      events.push("status-card");
+    },
     openModelMenu: async () => {
       events.push("model-menu");
     },
