@@ -661,6 +661,77 @@ test("Model fallback leaves the model alone for non-provider errors", async () =
   assert.equal(switches, 0);
 });
 
+test("Model fallback prefers a same-family host on another provider first", async () => {
+  const active = createModelTestModel("deepseek", "deepseek-flash");
+  const mimo = createModelTestModel("amd", "MiMo-V2.6-Flash");
+  const amdDeepseek = createModelTestModel("amd", "DeepSeek-V4.1-Flash");
+  const nvidiaDeepseek = createModelTestModel(
+    "nvidia",
+    "deepseek-ai/deepseek-v4.1-flash",
+  );
+  const switched: string[] = [];
+  const activated: string[] = [];
+  const runtime = createTelegramModelFallbackRuntime<MenuModel>({
+    getActiveModel: () => active,
+    createSettingsManager: () => ({
+      getEnabledModels: () => [
+        "deepseek/deepseek-flash",
+        "amd/MiMo-V2.6-Flash",
+        "amd/DeepSeek-V4.1-Flash",
+        "nvidia/deepseek-ai/deepseek-v4.1-flash",
+      ],
+    }),
+    setModel: async (model) => {
+      switched.push(getCanonicalModelId(model));
+      return true;
+    },
+    setCurrentModel: (model) => {
+      activated.push(getCanonicalModelId(model));
+    },
+  });
+  const note = await runtime("Stream ended without finish_reason", {
+    cwd: "/tmp",
+    modelRegistry: {
+      refresh: () => {},
+      getAvailable: () => [active, mimo, amdDeepseek, nvidiaDeepseek],
+    },
+  });
+  // MiMo comes first in enabledModels, but the DeepSeek family wins because the
+  // active model is DeepSeek: stay on the same family on a healthy host.
+  assert.deepEqual(switched, ["amd/DeepSeek-V4.1-Flash"]);
+  // The active-model state must follow the switch, otherwise /model would still
+  // show the dead model as active.
+  assert.deepEqual(activated, ["amd/DeepSeek-V4.1-Flash"]);
+  assert.match(note ?? "", /amd\/DeepSeek-V4\.1-Flash/);
+});
+
+test("Model fallback keeps enabledModels order when the family has no other host", async () => {
+  const active = createModelTestModel("deepseek", "deepseek-flash");
+  const groq = createModelTestModel("groq", "openai/gpt-oss-120b");
+  const ovh = createModelTestModel("ovh", "gpt-oss-120b");
+  const switched: string[] = [];
+  const runtime = createTelegramModelFallbackRuntime<MenuModel>({
+    getActiveModel: () => active,
+    createSettingsManager: () => ({
+      getEnabledModels: () => [
+        "deepseek/deepseek-flash",
+        "groq/openai/gpt-oss-120b",
+        "ovh/gpt-oss-120b",
+      ],
+    }),
+    setModel: async (model) => {
+      switched.push(getCanonicalModelId(model));
+      return true;
+    },
+    setCurrentModel: () => {},
+  });
+  await runtime("503 status code", {
+    cwd: "/tmp",
+    modelRegistry: { refresh: () => {}, getAvailable: () => [active, groq, ovh] },
+  });
+  assert.deepEqual(switched, ["groq/openai/gpt-oss-120b"]);
+});
+
 test("Model fallback skips models pi refuses and stops when nothing is left", async () => {
   const active = createModelTestModel("amd", "DeepSeek-V4.1-Flash");
   const middle = createModelTestModel("nvidia", "z-ai/glm-5.3-flash");
@@ -677,7 +748,8 @@ test("Model fallback skips models pi refuses and stops when nothing is left", as
     }),
     setModel: async (model) => {
       attempted.push(getCanonicalModelId(model));
-      return getCanonicalModelId(model) === "deepseek/deepseek-v4-pro";
+      // pi refuses the same-family host, so the fallback must keep walking.
+      return getCanonicalModelId(model) === "nvidia/z-ai/glm-5.3-flash";
     },
     setCurrentModel: () => {},
   });
@@ -688,11 +760,13 @@ test("Model fallback skips models pi refuses and stops when nothing is left", as
       getAvailable: () => [active, middle, last],
     },
   });
+  // Same-family host on another provider is tried first (deepseek-v4-pro),
+  // pi refuses it, then the fallback continues with the next model in order.
   assert.deepEqual(attempted, [
-    "nvidia/z-ai/glm-5.3-flash",
     "deepseek/deepseek-v4-pro",
+    "nvidia/z-ai/glm-5.3-flash",
   ]);
-  assert.match(note ?? "", /deepseek\/deepseek-v4-pro/);
+  assert.match(note ?? "", /nvidia\/z-ai\/glm-5\.3-flash/);
 });
 
 test("Model fallback wraps around the enabled order", async () => {

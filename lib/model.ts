@@ -259,6 +259,38 @@ export function getCanonicalModelId(
   return `${model.provider}/${model.id}`;
 }
 
+/**
+ * Coarse model family derived from the model id, used by the provider-error
+ * fallback to keep the owner on the SAME model family when the primary host
+ * dies. Example: `deepseek-flash` failing on the paid API should first try
+ * `DeepSeek-V4.1-Flash` on AMD / `deepseek-v4.1-flash` on NVIDIA / the
+ * OpenCode-hosted free `deepseek-v4.1-flash-free` before jumping to an
+ * unrelated model. Order inside the family still follows enabledModels order.
+ */
+const MODEL_FAMILY_TOKENS = [
+  "deepseek",
+  "nemotron",
+  "gpt-oss",
+  "gemini",
+  "gemma",
+  "llama",
+  "mistral",
+  "qwen",
+  "glm",
+  "mimo",
+  "kimi",
+  "minimax",
+  "step",
+  "claude",
+] as const;
+
+export function getModelFamily(
+  model: Pick<MenuModel, "provider" | "id">,
+): string | undefined {
+  const haystack = `${model.id} ${model.provider}`.toLowerCase();
+  return MODEL_FAMILY_TOKENS.find((token) => haystack.includes(token));
+}
+
 // --- Provider-error auto fallback ---
 
 /**
@@ -283,6 +315,13 @@ export function isProviderServerModelError(errorMessage: string): boolean {
     return false;
   }
   return (
+    // Gateways that close the SSE stream without a final finish_reason chunk
+    // (OpenRouter free tiers, shims). pi-ai keeps the content when there is any
+    // (see ~/.pi/patch-pi-finish-reason.mjs); an empty stream still lands here
+    // and deserves the same fallback as a 5xx.
+    /stream ended without finish_reason|without finish_reason/i.test(
+      errorMessage,
+    ) ||
     /\b410\b/.test(errorMessage) ||
     /\b\d{3} status code\b/.test(errorMessage) ||
     /timeout|timed out|ETIMEDOUT|ECONNRESET|ENOTFOUND|EAI_AGAIN|fetch failed|socket hang up|UND_ERR|network|overloaded|rate limit/i.test(
@@ -351,7 +390,29 @@ export function createTelegramModelFallbackRuntime<
       activeIndex >= 0
         ? [...chain.slice(activeIndex + 1), ...chain.slice(0, activeIndex)]
         : chain;
-    for (const entry of ordered) {
+    // Same-family first: when the paid DeepSeek host dies, try the DeepSeek
+    // models hosted elsewhere (AMD / NVIDIA / OpenCode free) before jumping to
+    // an unrelated model. A model of the same family on the SAME provider is
+    // pointless (that provider is the thing failing), so it stays in the tail.
+    // Relative order inside each group still follows enabledModels.
+    const activeFamily = getModelFamily(active);
+    const preferred = activeFamily
+      ? [
+          ...ordered.filter(
+            (entry) =>
+              getModelFamily(entry.model) === activeFamily &&
+              entry.model.provider !== active.provider,
+          ),
+          ...ordered.filter(
+            (entry) =>
+              !(
+                getModelFamily(entry.model) === activeFamily &&
+                entry.model.provider !== active.provider
+              ),
+          ),
+        ]
+      : ordered;
+    for (const entry of preferred) {
       if (modelsMatch(entry.model, active)) continue;
       const changed = await deps.setModel(entry.model, ctx);
       if (changed === false) continue;
