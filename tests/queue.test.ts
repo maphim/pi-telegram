@@ -2645,6 +2645,14 @@ test("friendlyTurnErrorMessage translates provider error soup into owner-friendl
   assert.match(friendlyTurnErrorMessage("fetch failed"), /Mất kết nối/);
   assert.match(friendlyTurnErrorMessage("socket hang up"), /Mất kết nối/);
 
+  // Oversized request body (nginx 413 HTML) must steer the owner to /compact.
+  const tooLarge = friendlyTurnErrorMessage(
+    '413 <html><head><title>413 Request Entity Too Large</title></head><body><center><h1>413 Request Entity Too Large</h1></center><hr><center>nginx</center></body></html>',
+  );
+  assert.match(tooLarge, /413/);
+  assert.match(tooLarge, /\/compact/);
+  assert.doesNotMatch(tooLarge, /<html>/);
+
   // Unknown errors stay intact but visibly marked.
   assert.match(friendlyTurnErrorMessage("weird explosion"), /⚠️ weird explosion/);
 });

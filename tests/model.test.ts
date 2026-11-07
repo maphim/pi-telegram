@@ -586,6 +586,15 @@ test("Provider error classifier separates provider failures from user/context er
   assert.equal(isProviderServerModelError("fetch failed"), true);
   assert.equal(isProviderServerModelError("request timed out"), true);
   assert.equal(isProviderServerModelError("The turn was aborted by user"), false);
+  // Payload-too-large is a session-size problem: switching model would not shrink
+  // the request body, so the classifier must not trigger a fallback switch.
+  assert.equal(
+    isProviderServerModelError(
+      '413 <html><head><title>413 Request Entity Too Large</title></head></html>',
+    ),
+    false,
+  );
+  assert.equal(isProviderServerModelError("413 status code (Request Entity Too Large)"), false);
   assert.equal(isProviderServerModelError("context window exceeded"), false);
   assert.equal(isProviderServerModelError("unexpected internal bug"), false);
   assert.equal(isProviderServerModelError(""), false);

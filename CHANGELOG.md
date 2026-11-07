@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.12.1: Oversized Request (413) Steers to /compact
+
+- `[Errors]` A `413 Request Entity Too Large` reply from the provider (nginx HTML) is now translated into a Vietnamese hint that names the real cause — session history over the ~48 MB request-body cap, usually heavy screenshots — and points at `/compact`. Impact: the owner no longer receives raw nginx HTML, and is not told to change model when changing model cannot help.
+- `[Fallback]` The provider-error classifier explicitly excludes 413 / "Request Entity Too Large" from the model-fallback path. Impact: an oversized session no longer burns an extra turn auto-switching models that would send the same oversized body.
+
 ## 0.12.0: Session Switching (/sessions, /resume, /new)
 
 - `[Sessions]` New `/sessions` command lists the 10 most recently active pi sessions (index, start time, size, short id, first user message preview, current-session marker); `/resume <index|id-prefix>` restarts the bridge into that session; `/new` opens a fresh session while keeping every old session file resumable. Impact: long-running context can be split per topic and yesterday's thread can be picked up from Telegram — one active session at a time, by design.

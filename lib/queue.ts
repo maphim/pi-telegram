@@ -871,6 +871,9 @@ export function friendlyTurnErrorMessage(errorMessage: string): string {
   if (errorMessage.includes("410")) {
     return "⚠️ Model đang dùng đã bị nhà cung cấp gỡ (HTTP 410 Gone). Anh đổi model bằng nút 🧠 Model (hoặc /model) nhé.";
   }
+  if (/\b413\b|Request Entity Too Large/i.test(errorMessage)) {
+    return "⚠️ Request quá lớn (HTTP 413) — lịch sử phiên đã vượt giới hạn thân request (~48 MB) của nhà cung cấp, thường do ảnh chụp màn hình nặng tích trong phiên. Anh gửi /compact để nén phiên rồi thử lại — đổi model không giúp được.";
+  }
   const http = errorMessage.match(/(\d{3}) status code/);
   if (http) {
     return `⚠️ Lỗi nhà cung cấp model (HTTP ${http[1]}) — thử lại sau hoặc đổi model bằng /model.`;

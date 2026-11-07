@@ -276,6 +276,12 @@ export function isProviderServerModelError(errorMessage: string): boolean {
   ) {
     return false;
   }
+  // Payload too large (HTTP 413 / "Request Entity Too Large") is a session-size
+  // problem, not the model's fault: swapping models would burn another turn for
+  // the same oversized body. The owner needs /compact instead.
+  if (/\b413\b|Request Entity Too Large/i.test(errorMessage)) {
+    return false;
+  }
   return (
     /\b410\b/.test(errorMessage) ||
     /\b\d{3} status code\b/.test(errorMessage) ||
