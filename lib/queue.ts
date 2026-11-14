@@ -1009,6 +1009,10 @@ export function createTelegramAgentEndHook<
         ? (errorMessage: string) =>
             deps.autoSwitchOnModelError?.(errorMessage, ctx)
         : undefined,
+      getSessionFile: () =>
+        deps.getSessionFile?.(ctx) ??
+        (ctx as any)?.sessionManager?.getSessionFile?.(),
+      autoStripImagesOn413: deps.autoStripImagesOn413 !== false,
     });
   };
 }
