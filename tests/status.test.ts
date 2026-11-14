@@ -411,6 +411,68 @@ test("Status HTML shows the opencode-style model usage card", () => {
   assert.match(html, /\$0\.0438 spent/);
 });
 
+test("Status HTML shows the concrete model behind llm-gateway auto-free", () => {
+  const buildStatusHtml = createTelegramStatusHtmlBuilder({
+    getActiveModel: () => ({
+      provider: "llm-gateway",
+      id: "auto-free",
+      contextWindow: 128000,
+    }),
+  });
+  const html = buildStatusHtml({
+    sessionManager: {
+      getEntries: () => [
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            provider: "llm-gateway",
+            model: "auto-free",
+            responseModel: "groq/openai/gpt-oss-120b",
+            usage: {
+              input: 10,
+              output: 2,
+              cacheRead: 0,
+              cacheWrite: 0,
+              cost: { total: 0 },
+            },
+          },
+        },
+      ],
+    },
+    getContextUsage: () => ({ tokens: 12, percent: 0.1, contextWindow: 128000 }),
+    isIdle: () => true,
+    modelRegistry: { isUsingOAuth: () => false },
+  });
+  assert.match(html, /Model.*llm-gateway\/auto-free/s);
+  assert.match(html, /LLM gốc.*groq\/openai\/gpt-oss-120b/s);
+});
+
+test("Status HTML hides the routed-model row for non-gateway providers", () => {
+  const buildStatusHtml = createTelegramStatusHtmlBuilder({
+    getActiveModel: () => ({ provider: "openrouter", id: "auto" }),
+  });
+  const html = buildStatusHtml({
+    sessionManager: {
+      getEntries: () => [
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            provider: "openrouter",
+            model: "auto",
+            responseModel: "anthropic/claude-sonnet-4",
+          },
+        },
+      ],
+    },
+    getContextUsage: () => ({ percent: 0, contextWindow: 1000 }),
+    isIdle: () => true,
+    modelRegistry: { isUsingOAuth: () => false },
+  });
+  assert.doesNotMatch(html, /LLM gốc/);
+});
+
 test("Status HTML marks subscription models and unknown context honestly", () => {
   const buildStatusHtml = createTelegramStatusHtmlBuilder({
     getActiveModel: () => ({ provider: "openai", id: "gpt-5" }),

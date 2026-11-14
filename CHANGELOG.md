@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.12.2: Gateway Upstream Model In /status
+
+- `[Status]` When the active provider is `llm-gateway`, the `/status` card now adds an `LLM gốc` row showing the concrete upstream model that answered, read from the last assistant message's `responseModel` (for example `groq/openai/gpt-oss-120b` behind `llm-gateway/auto-free`). Impact: the model row keeps the selected gateway alias while the new row answers which real model served the turn.
+- `[Gateway]` The gateway now rewrites the OpenAI response `model` field in both SSE streams and non-streaming JSON to the routed model, so π records the routed model as `responseModel` instead of a provider-internal alias. Impact: the status row is accurate even when the upstream masks its model name.
+
 ## 0.12.1: Oversized Request (413) Steers to /compact
 
 - `[Errors]` A `413 Request Entity Too Large` reply from the provider (nginx HTML) is now translated into a Vietnamese hint that names the real cause — session history over the ~48 MB request-body cap, usually heavy screenshots — and points at `/compact`. Impact: the owner no longer receives raw nginx HTML, and is not told to change model when changing model cannot help.

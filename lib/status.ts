@@ -16,6 +16,9 @@ export interface TelegramUsageStats {
 
 interface TelegramUsageMessage {
   role: string;
+  provider?: string;
+  model?: string;
+  responseModel?: string;
   usage?: {
     input: number;
     output: number;
@@ -585,6 +588,31 @@ function isCostResetActive(): boolean {
   return false;
 }
 
+/**
+ * The gateway forwards the concrete routed model in the response `model`
+ * field; pi stores it as `responseModel`. Show it for llm-gateway so the
+ * status card answers "which model actually answered?" even when the active
+ * model is `auto-free`.
+ */
+function getLastGatewayResponseModel(
+  ctx: TelegramStatusContext,
+  activeModel: TelegramStatusActiveModel | undefined,
+): string | undefined {
+  if (activeModel?.provider !== "llm-gateway") return undefined;
+  const entries = ctx.sessionManager.getEntries();
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i];
+    if (entry.type !== "message" || !entry.message) continue;
+    const message = entry.message;
+    if (message.role !== "assistant") continue;
+    const responseModel = message.responseModel?.trim();
+    if (!responseModel) continue;
+    if (responseModel === message.model) continue;
+    return responseModel;
+  }
+  return undefined;
+}
+
 export function buildStatusHtml(
   ctx: TelegramStatusContext,
   activeModel: TelegramStatusActiveModel | undefined,
@@ -602,6 +630,10 @@ export function buildStatusHtml(
       : undefined;
   if (modelId) {
     lines.push(buildStatusRow("Model", modelId));
+  }
+  const gatewayResponseModel = getLastGatewayResponseModel(ctx, activeModel);
+  if (gatewayResponseModel) {
+    lines.push(buildStatusRow("LLM gốc", gatewayResponseModel));
   }
   lines.push(buildStatusRow("Status", buildStatusSummary(ctx)));
   const usageSummary = buildUsageSummary(stats);
